@@ -19,11 +19,10 @@ import (
 	lds "github.com/ipfs/go-ds-leveldb"
 	blockstore "github.com/ipfs/go-ipfs-blockstore"
 	offline "github.com/ipfs/go-ipfs-exchange-offline"
+	ipfspinner "github.com/ipfs/go-ipfs-pinner"
 	util "github.com/ipfs/go-ipfs-util"
 	ipld "github.com/ipfs/go-ipld-format"
 	logging "github.com/ipfs/go-log"
-
-	rcpinner "github.com/photon-storage/go-rc-pinner"
 )
 
 var rand = util.NewTimeSeededRand()
@@ -52,7 +51,7 @@ func randNode() (*mdag.ProtoNode, cid.Cid) {
 	return nd, k
 }
 
-func assertPinned(t *testing.T, p rcpinner.Pinner, c cid.Cid, failmsg string) {
+func assertPinned(t *testing.T, p ipfspinner.Pinner, c cid.Cid, failmsg string) {
 	_, pinned, err := p.IsPinned(context.Background(), c)
 	if err != nil {
 		t.Fatal(err)
@@ -63,13 +62,13 @@ func assertPinned(t *testing.T, p rcpinner.Pinner, c cid.Cid, failmsg string) {
 	}
 }
 
-func assertPinnedWithType(t *testing.T, p rcpinner.Pinner, c cid.Cid, mode rcpinner.Mode, failmsg string) {
+func assertPinnedWithType(t *testing.T, p ipfspinner.Pinner, c cid.Cid, mode ipfspinner.Mode, failmsg string) {
 	modeText, pinned, err := p.IsPinnedWithType(context.Background(), c, mode)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	expect, ok := rcpinner.ModeToString(mode)
+	expect, ok := ipfspinner.ModeToString(mode)
 	if !ok {
 		t.Fatal("unrecognized pin mode")
 	}
@@ -78,7 +77,7 @@ func assertPinnedWithType(t *testing.T, p rcpinner.Pinner, c cid.Cid, mode rcpin
 		t.Fatal(failmsg)
 	}
 
-	if mode == rcpinner.Any {
+	if mode == ipfspinner.Any {
 		return
 	}
 
@@ -87,7 +86,7 @@ func assertPinnedWithType(t *testing.T, p rcpinner.Pinner, c cid.Cid, mode rcpin
 	}
 }
 
-func assertUnpinned(t *testing.T, p rcpinner.Pinner, c cid.Cid, failmsg string) {
+func assertUnpinned(t *testing.T, p ipfspinner.Pinner, c cid.Cid, failmsg string) {
 	_, pinned, err := p.IsPinned(context.Background(), c)
 	if err != nil {
 		t.Fatal(err)
@@ -126,7 +125,7 @@ func TestPinnerBasic(t *testing.T) {
 	}
 
 	assertPinned(t, p, ak, "Failed to find key")
-	assertPinnedWithType(t, p, ak, rcpinner.Direct, "Expected direct pin")
+	assertPinnedWithType(t, p, ak, ipfspinner.Direct, "Expected direct pin")
 
 	// create new node c, to be indirectly pinned through b
 	c, _ := randNode()
@@ -162,7 +161,7 @@ func TestPinnerBasic(t *testing.T) {
 	assertPinned(t, p, ck, "child of recursively pinned node not found")
 
 	assertPinned(t, p, bk, "Pinned node not found")
-	assertPinnedWithType(t, p, bk, rcpinner.Recursive, "Recursively pinned node not found")
+	assertPinnedWithType(t, p, bk, ipfspinner.Recursive, "Recursively pinned node not found")
 
 	d, _ := randNode()
 	err = d.AddNodeLink("a", a)
@@ -223,22 +222,22 @@ func TestPinnerBasic(t *testing.T) {
 	for _, pn := range pinned {
 		switch pn.Key {
 		case ak:
-			if pn.Mode != rcpinner.Direct {
+			if pn.Mode != ipfspinner.Direct {
 				t.Error("A pinned with wrong mode")
 			}
 		case bk:
-			if pn.Mode != rcpinner.Recursive {
+			if pn.Mode != ipfspinner.Recursive {
 				t.Error("B pinned with wrong mode")
 			}
 		case ck:
-			if pn.Mode != rcpinner.Indirect {
+			if pn.Mode != ipfspinner.Indirect {
 				t.Error("C should be pinned indirectly")
 			}
 			if pn.Via != dk && pn.Via != bk {
 				t.Error("C should be pinned via D or B")
 			}
 		case dk:
-			if pn.Mode != rcpinner.Recursive {
+			if pn.Mode != ipfspinner.Recursive {
 				t.Error("D pinned with wrong mode")
 			}
 		}
@@ -272,8 +271,8 @@ func TestPinnerBasic(t *testing.T) {
 	}
 
 	err = p.Unpin(ctx, dk, true)
-	if err != rcpinner.ErrNotPinned {
-		t.Fatal("expected error:", rcpinner.ErrNotPinned)
+	if err != ipfspinner.ErrNotPinned {
+		t.Fatal("expected error:", ipfspinner.ErrNotPinned)
 	}
 
 	err = p.Flush(ctx)
@@ -304,7 +303,7 @@ func TestPinnerBasic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pp.Mode != rcpinner.Direct {
+	if pp.Mode != ipfspinner.Direct {
 		t.Error("loaded pin has wrong mode")
 	}
 	if pp.Cid != ak {
@@ -353,7 +352,7 @@ func TestAddLoadPin(t *testing.T) {
 		panic(err)
 	}
 
-	mode := rcpinner.Recursive
+	mode := ipfspinner.Recursive
 	name := "my-pin"
 	pid, err := p.addPin(ctx, ak, mode, name)
 	if err != nil {
@@ -485,7 +484,7 @@ func TestFlush(t *testing.T) {
 	}
 	_, k := randNode()
 
-	p.PinWithMode(ctx, k, rcpinner.Recursive)
+	p.PinWithMode(ctx, k, ipfspinner.Recursive)
 	if err = p.Flush(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -707,7 +706,7 @@ func TestLoadDirty(t *testing.T) {
 		t.Fatal("index should have been rebuilt")
 	}
 
-	has, err = p.removePinsForCid(ctx, bk, rcpinner.Any)
+	has, err = p.removePinsForCid(ctx, bk, ipfspinner.Any)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -719,7 +718,7 @@ func TestLoadDirty(t *testing.T) {
 func TestEncodeDecodePin(t *testing.T) {
 	_, c := randNode()
 
-	pin := newPin(c, rcpinner.Recursive, "testpin")
+	pin := newPin(c, ipfspinner.Recursive, "testpin")
 	pin.Metadata = make(map[string]interface{}, 2)
 	pin.Metadata["hello"] = "world"
 	pin.Metadata["foo"] = "bar"
@@ -741,8 +740,8 @@ func TestEncodeDecodePin(t *testing.T) {
 		t.Errorf("wrong pin cid: expect %q got %q", pin.Cid.String(), decPin.Cid.String())
 	}
 	if decPin.Mode != pin.Mode {
-		expect, _ := rcpinner.ModeToString(pin.Mode)
-		got, _ := rcpinner.ModeToString(decPin.Mode)
+		expect, _ := ipfspinner.ModeToString(pin.Mode)
+		got, _ := ipfspinner.ModeToString(decPin.Mode)
 		t.Errorf("wrong pin mode: expect %s got %s", expect, got)
 	}
 	if decPin.Name != pin.Name {
@@ -759,7 +758,7 @@ func TestEncodeDecodePin(t *testing.T) {
 	}
 }
 
-func makeTree(ctx context.Context, aBranchLen int, dserv ipld.DAGService, p rcpinner.Pinner) (aKeys []cid.Cid, bk cid.Cid, ck cid.Cid, err error) {
+func makeTree(ctx context.Context, aBranchLen int, dserv ipld.DAGService, p ipfspinner.Pinner) (aKeys []cid.Cid, bk cid.Cid, ck cid.Cid, err error) {
 	if aBranchLen < 3 {
 		err = errors.New("set aBranchLen to at least 3")
 		return
@@ -847,7 +846,7 @@ func makeNodes(count int, dserv ipld.DAGService) []ipld.Node {
 	return nodes
 }
 
-func pinNodes(nodes []ipld.Node, p rcpinner.Pinner, recursive bool) {
+func pinNodes(nodes []ipld.Node, p ipfspinner.Pinner, recursive bool) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var err error
@@ -864,7 +863,7 @@ func pinNodes(nodes []ipld.Node, p rcpinner.Pinner, recursive bool) {
 	}
 }
 
-func unpinNodes(nodes []ipld.Node, p rcpinner.Pinner) {
+func unpinNodes(nodes []ipld.Node, p ipfspinner.Pinner) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var err error
@@ -963,7 +962,7 @@ func BenchmarkNthPin(b *testing.B) {
 	}
 }
 
-func benchmarkNthPin(b *testing.B, count int, pinner rcpinner.Pinner, dserv ipld.DAGService) {
+func benchmarkNthPin(b *testing.B, count int, pinner ipfspinner.Pinner, dserv ipld.DAGService) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	nodes := makeNodes(count, dserv)
@@ -1010,7 +1009,7 @@ func BenchmarkNPins(b *testing.B) {
 	}
 }
 
-func benchmarkNPins(b *testing.B, count int, pinner rcpinner.Pinner, dserv ipld.DAGService) {
+func benchmarkNPins(b *testing.B, count int, pinner ipfspinner.Pinner, dserv ipld.DAGService) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	nodes := makeNodes(count, dserv)
@@ -1051,7 +1050,7 @@ func BenchmarkNUnpins(b *testing.B) {
 	}
 }
 
-func benchmarkNUnpins(b *testing.B, count int, pinner rcpinner.Pinner, dserv ipld.DAGService) {
+func benchmarkNUnpins(b *testing.B, count int, pinner ipfspinner.Pinner, dserv ipld.DAGService) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	nodes := makeNodes(count, dserv)
@@ -1092,7 +1091,7 @@ func BenchmarkPinAll(b *testing.B) {
 	}
 }
 
-func benchmarkPinAll(b *testing.B, count int, pinner rcpinner.Pinner, dserv ipld.DAGService) {
+func benchmarkPinAll(b *testing.B, count int, pinner ipfspinner.Pinner, dserv ipld.DAGService) {
 	nodes := makeNodes(count, dserv)
 	b.ResetTimer()
 
@@ -1153,7 +1152,7 @@ func TestCidIndex(t *testing.T) {
 	cidKey := c.KeyString()
 
 	// Pin the cid
-	pid, err := pinner.addPin(ctx, c, rcpinner.Recursive, "")
+	pid, err := pinner.addPin(ctx, c, ipfspinner.Recursive, "")
 	if err != nil {
 		t.Fatal(err)
 	}

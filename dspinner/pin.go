@@ -10,6 +10,7 @@ import (
 	"github.com/ipfs/go-cid"
 	ds "github.com/ipfs/go-datastore"
 	"github.com/ipfs/go-datastore/query"
+	ipfspinner "github.com/ipfs/go-ipfs-pinner"
 	ipld "github.com/ipfs/go-ipld-format"
 	logging "github.com/ipfs/go-log"
 	"github.com/ipfs/go-merkledag"
@@ -17,7 +18,6 @@ import (
 	"github.com/polydawn/refmt/cbor"
 	"github.com/polydawn/refmt/obj/atlas"
 
-	rcpinner "github.com/photon-storage/go-rc-pinner"
 	"github.com/photon-storage/go-rc-pinner/dsindex"
 )
 
@@ -43,13 +43,13 @@ var (
 )
 
 func init() {
-	directStr, ok := rcpinner.ModeToString(rcpinner.Direct)
+	directStr, ok := ipfspinner.ModeToString(ipfspinner.Direct)
 	if !ok {
 		panic("could not find Direct pin enum")
 	}
 	linkDirect = directStr
 
-	recursiveStr, ok := rcpinner.ModeToString(rcpinner.Recursive)
+	recursiveStr, ok := ipfspinner.ModeToString(ipfspinner.Recursive)
 	if !ok {
 		panic("could not find Recursive pin enum")
 	}
@@ -96,13 +96,13 @@ type pinner struct {
 	dirty int64
 }
 
-var _ rcpinner.Pinner = (*pinner)(nil)
+var _ ipfspinner.Pinner = (*pinner)(nil)
 
 type pin struct {
 	Id       string
 	Cid      cid.Cid
 	Metadata map[string]interface{}
-	Mode     rcpinner.Mode
+	Mode     ipfspinner.Mode
 	Name     string
 }
 
@@ -110,7 +110,7 @@ func (p *pin) dsKey() ds.Key {
 	return ds.NewKey(path.Join(pinKeyPath, p.Id))
 }
 
-func newPin(c cid.Cid, mode rcpinner.Mode, name string) *pin {
+func newPin(c cid.Cid, mode ipfspinner.Mode, name string) *pin {
 	return &pin{
 		Id:   path.Base(ds.RandomKey().String()),
 		Cid:  c,
@@ -234,13 +234,13 @@ func (p *pinner) doPinRecursive(ctx context.Context, c cid.Cid, fetch bool) erro
 		return err
 	}
 	if found {
-		_, err = p.removePinsForCid(ctx, c, rcpinner.Direct)
+		_, err = p.removePinsForCid(ctx, c, ipfspinner.Direct)
 		if err != nil {
 			return err
 		}
 	}
 
-	_, err = p.addPin(ctx, c, rcpinner.Recursive, "")
+	_, err = p.addPin(ctx, c, ipfspinner.Recursive, "")
 	if err != nil {
 		return err
 	}
@@ -261,7 +261,7 @@ func (p *pinner) doPinDirect(ctx context.Context, c cid.Cid) error {
 		return fmt.Errorf("%s already pinned recursively", c.String())
 	}
 
-	_, err = p.addPin(ctx, c, rcpinner.Direct, "")
+	_, err = p.addPin(ctx, c, ipfspinner.Direct, "")
 	if err != nil {
 		return err
 	}
@@ -269,7 +269,7 @@ func (p *pinner) doPinDirect(ctx context.Context, c cid.Cid) error {
 	return p.flushPins(ctx, false)
 }
 
-func (p *pinner) addPin(ctx context.Context, c cid.Cid, mode rcpinner.Mode, name string) (string, error) {
+func (p *pinner) addPin(ctx context.Context, c cid.Cid, mode ipfspinner.Mode, name string) (string, error) {
 	// Create new pin and store in datastore
 	pp := newPin(c, mode, name)
 
@@ -289,9 +289,9 @@ func (p *pinner) addPin(ctx context.Context, c cid.Cid, mode rcpinner.Mode, name
 
 	// Store CID index
 	switch mode {
-	case rcpinner.Recursive:
+	case ipfspinner.Recursive:
 		err = p.cidRIndex.Add(ctx, c.KeyString(), pp.Id)
-	case rcpinner.Direct:
+	case ipfspinner.Direct:
 		err = p.cidDIndex.Add(ctx, c.KeyString(), pp.Id)
 	default:
 		panic("pin mode must be recursive or direct")
@@ -304,7 +304,7 @@ func (p *pinner) addPin(ctx context.Context, c cid.Cid, mode rcpinner.Mode, name
 		// Store name index
 		err = p.nameIndex.Add(ctx, name, pp.Id)
 		if err != nil {
-			if mode == rcpinner.Recursive {
+			if mode == ipfspinner.Recursive {
 				e := p.cidRIndex.Delete(ctx, c.KeyString(), pp.Id)
 				if e != nil {
 					log.Errorf("error deleting index: %s", e)
@@ -327,7 +327,7 @@ func (p *pinner) removePin(ctx context.Context, pp *pin) error {
 	var err error
 
 	// Remove cid index from datastore
-	if pp.Mode == rcpinner.Recursive {
+	if pp.Mode == ipfspinner.Recursive {
 		err = p.cidRIndex.Delete(ctx, pp.Cid.KeyString(), pp.Id)
 	} else {
 		err = p.cidDIndex.Delete(ctx, pp.Cid.KeyString(), pp.Id)
@@ -383,11 +383,11 @@ func (p *pinner) Unpin(ctx context.Context, c cid.Cid, recursive bool) error {
 			return err
 		}
 		if !has {
-			return rcpinner.ErrNotPinned
+			return ipfspinner.ErrNotPinned
 		}
 	}
 
-	removed, err := p.removePinsForCid(ctx, c, rcpinner.Any)
+	removed, err := p.removePinsForCid(ctx, c, ipfspinner.Any)
 	if err != nil {
 		return err
 	}
@@ -403,21 +403,21 @@ func (p *pinner) Unpin(ctx context.Context, c cid.Cid, recursive bool) error {
 func (p *pinner) IsPinned(ctx context.Context, c cid.Cid) (string, bool, error) {
 	p.lock.RLock()
 	defer p.lock.RUnlock()
-	return p.isPinnedWithType(ctx, c, rcpinner.Any)
+	return p.isPinnedWithType(ctx, c, ipfspinner.Any)
 }
 
 // IsPinnedWithType returns whether or not the given cid is pinned with the
 // given pin type, as well as returning the type of pin its pinned with.
-func (p *pinner) IsPinnedWithType(ctx context.Context, c cid.Cid, mode rcpinner.Mode) (string, bool, error) {
+func (p *pinner) IsPinnedWithType(ctx context.Context, c cid.Cid, mode ipfspinner.Mode) (string, bool, error) {
 	p.lock.RLock()
 	defer p.lock.RUnlock()
 	return p.isPinnedWithType(ctx, c, mode)
 }
 
-func (p *pinner) isPinnedWithType(ctx context.Context, c cid.Cid, mode rcpinner.Mode) (string, bool, error) {
+func (p *pinner) isPinnedWithType(ctx context.Context, c cid.Cid, mode ipfspinner.Mode) (string, bool, error) {
 	cidKey := c.KeyString()
 	switch mode {
-	case rcpinner.Recursive:
+	case ipfspinner.Recursive:
 		has, err := p.cidRIndex.HasAny(ctx, cidKey)
 		if err != nil {
 			return "", false, err
@@ -426,7 +426,7 @@ func (p *pinner) isPinnedWithType(ctx context.Context, c cid.Cid, mode rcpinner.
 			return linkRecursive, true, nil
 		}
 		return "", false, nil
-	case rcpinner.Direct:
+	case ipfspinner.Direct:
 		has, err := p.cidDIndex.HasAny(ctx, cidKey)
 		if err != nil {
 			return "", false, err
@@ -435,10 +435,10 @@ func (p *pinner) isPinnedWithType(ctx context.Context, c cid.Cid, mode rcpinner.
 			return linkDirect, true, nil
 		}
 		return "", false, nil
-	case rcpinner.Internal:
+	case ipfspinner.Internal:
 		return "", false, nil
-	case rcpinner.Indirect:
-	case rcpinner.Any:
+	case ipfspinner.Indirect:
+	case ipfspinner.Any:
 		has, err := p.cidRIndex.HasAny(ctx, cidKey)
 		if err != nil {
 			return "", false, err
@@ -456,8 +456,8 @@ func (p *pinner) isPinnedWithType(ctx context.Context, c cid.Cid, mode rcpinner.
 	default:
 		err := fmt.Errorf(
 			"invalid Pin Mode '%d', must be one of {%d, %d, %d, %d, %d}",
-			mode, rcpinner.Direct, rcpinner.Indirect, rcpinner.Recursive,
-			rcpinner.Internal, rcpinner.Any)
+			mode, ipfspinner.Direct, ipfspinner.Indirect, ipfspinner.Recursive,
+			ipfspinner.Internal, ipfspinner.Any)
 		return "", false, err
 	}
 
@@ -500,8 +500,8 @@ func (p *pinner) isPinnedWithType(ctx context.Context, c cid.Cid, mode rcpinner.
 // calling IsPinned for each key, returns the pinned status of cid(s)
 //
 // TODO: If a CID is pinned by multiple pins, should they all be reported?
-func (p *pinner) CheckIfPinned(ctx context.Context, cids ...cid.Cid) ([]rcpinner.Pinned, error) {
-	pinned := make([]rcpinner.Pinned, 0, len(cids))
+func (p *pinner) CheckIfPinned(ctx context.Context, cids ...cid.Cid) ([]ipfspinner.Pinned, error) {
+	pinned := make([]ipfspinner.Pinned, 0, len(cids))
 	toCheck := cid.NewSet()
 
 	p.lock.RLock()
@@ -515,14 +515,14 @@ func (p *pinner) CheckIfPinned(ctx context.Context, cids ...cid.Cid) ([]rcpinner
 			return nil, err
 		}
 		if has {
-			pinned = append(pinned, rcpinner.Pinned{Key: c, Mode: rcpinner.Recursive})
+			pinned = append(pinned, ipfspinner.Pinned{Key: c, Mode: ipfspinner.Recursive})
 		} else {
 			has, err = p.cidDIndex.HasAny(ctx, cidKey)
 			if err != nil {
 				return nil, err
 			}
 			if has {
-				pinned = append(pinned, rcpinner.Pinned{Key: c, Mode: rcpinner.Direct})
+				pinned = append(pinned, ipfspinner.Pinned{Key: c, Mode: ipfspinner.Direct})
 			} else {
 				toCheck.Add(c)
 			}
@@ -543,7 +543,7 @@ func (p *pinner) CheckIfPinned(ctx context.Context, cids ...cid.Cid) ([]rcpinner
 			}
 
 			if toCheck.Has(c) {
-				pinned = append(pinned, rcpinner.Pinned{Key: c, Mode: rcpinner.Indirect, Via: rk})
+				pinned = append(pinned, ipfspinner.Pinned{Key: c, Mode: ipfspinner.Indirect, Via: rk})
 				toCheck.Remove(c)
 			}
 
@@ -563,7 +563,7 @@ func (p *pinner) CheckIfPinned(ctx context.Context, cids ...cid.Cid) ([]rcpinner
 
 	// Anything left in toCheck is not pinned
 	for _, k := range toCheck.Keys() {
-		pinned = append(pinned, rcpinner.Pinned{Key: k, Mode: rcpinner.NotPinned})
+		pinned = append(pinned, ipfspinner.Pinned{Key: k, Mode: ipfspinner.NotPinned})
 	}
 
 	return pinned, nil
@@ -572,17 +572,17 @@ func (p *pinner) CheckIfPinned(ctx context.Context, cids ...cid.Cid) ([]rcpinner
 // removePinsForCid removes all pins for a cid that has the specified mode.
 // Returns true if any pins, and all corresponding CID index entries, were
 // removed.  Otherwise, returns false.
-func (p *pinner) removePinsForCid(ctx context.Context, c cid.Cid, mode rcpinner.Mode) (bool, error) {
+func (p *pinner) removePinsForCid(ctx context.Context, c cid.Cid, mode ipfspinner.Mode) (bool, error) {
 	// Search for pins by CID
 	var ids []string
 	var err error
 	cidKey := c.KeyString()
 	switch mode {
-	case rcpinner.Recursive:
+	case ipfspinner.Recursive:
 		ids, err = p.cidRIndex.Search(ctx, cidKey)
-	case rcpinner.Direct:
+	case ipfspinner.Direct:
 		ids, err = p.cidDIndex.Search(ctx, cidKey)
-	case rcpinner.Any:
+	case ipfspinner.Any:
 		ids, err = p.cidRIndex.Search(ctx, cidKey)
 		if err != nil {
 			return false, err
@@ -610,17 +610,17 @@ func (p *pinner) removePinsForCid(ctx context.Context, c cid.Cid, mode rcpinner.
 				p.setDirty(ctx)
 				// Fix index; remove index for pin that does not exist
 				switch mode {
-				case rcpinner.Recursive:
+				case ipfspinner.Recursive:
 					_, err = p.cidRIndex.DeleteKey(ctx, cidKey)
 					if err != nil {
 						return false, fmt.Errorf("error deleting index: %s", err)
 					}
-				case rcpinner.Direct:
+				case ipfspinner.Direct:
 					_, err = p.cidDIndex.DeleteKey(ctx, cidKey)
 					if err != nil {
 						return false, fmt.Errorf("error deleting index: %s", err)
 					}
-				case rcpinner.Any:
+				case ipfspinner.Any:
 					_, err = p.cidRIndex.DeleteKey(ctx, cidKey)
 					if err != nil {
 						return false, fmt.Errorf("error deleting index: %s", err)
@@ -641,7 +641,7 @@ func (p *pinner) removePinsForCid(ctx context.Context, c cid.Cid, mode rcpinner.
 			}
 			return false, err
 		}
-		if mode == rcpinner.Any || pp.Mode == mode {
+		if mode == ipfspinner.Any || pp.Mode == mode {
 			err = p.removePin(ctx, pp)
 			if err != nil {
 				return false, err
@@ -758,13 +758,13 @@ func (p *pinner) Update(ctx context.Context, from, to cid.Cid, unpin bool) error
 		return err
 	}
 
-	_, err = p.addPin(ctx, to, rcpinner.Recursive, "")
+	_, err = p.addPin(ctx, to, ipfspinner.Recursive, "")
 	if err != nil {
 		return err
 	}
 
 	if unpin {
-		_, err = p.removePinsForCid(ctx, from, rcpinner.Recursive)
+		_, err = p.removePinsForCid(ctx, from, ipfspinner.Recursive)
 		if err != nil {
 			return err
 		}
@@ -811,12 +811,12 @@ func (p *pinner) Flush(ctx context.Context) error {
 
 // PinWithMode allows the user to have fine grained control over pin
 // counts
-func (p *pinner) PinWithMode(ctx context.Context, c cid.Cid, mode rcpinner.Mode) error {
+func (p *pinner) PinWithMode(ctx context.Context, c cid.Cid, mode ipfspinner.Mode) error {
 	// TODO: remove his to support multiple pins per CID
 	switch mode {
-	case rcpinner.Recursive:
+	case ipfspinner.Recursive:
 		return p.doPinRecursive(ctx, c, false)
-	case rcpinner.Direct:
+	case ipfspinner.Direct:
 		return p.doPinDirect(ctx, c)
 	default:
 		return fmt.Errorf("unrecognized pin mode")
@@ -946,12 +946,12 @@ func (p *pinner) rebuildIndexes(ctx context.Context) error {
 
 		var indexer, staleIndexer dsindex.Indexer
 		var idxrName, staleIdxrName string
-		if pp.Mode == rcpinner.Recursive {
+		if pp.Mode == ipfspinner.Recursive {
 			indexer = p.cidRIndex
 			staleIndexer = p.cidDIndex
 			idxrName = linkRecursive
 			staleIdxrName = linkDirect
-		} else if pp.Mode == rcpinner.Direct {
+		} else if pp.Mode == ipfspinner.Direct {
 			indexer = p.cidDIndex
 			staleIndexer = p.cidRIndex
 			idxrName = linkDirect
