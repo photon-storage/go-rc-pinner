@@ -13,14 +13,17 @@ import (
 	offline "github.com/ipfs/go-ipfs-exchange-offline"
 	ipld "github.com/ipfs/go-ipld-format"
 	mdag "github.com/ipfs/go-merkledag"
+
+	"github.com/photon-storage/go-common/testing/require"
 )
 
-func makeStoreLevelDB(dir string) (ds.Datastore, ipld.DAGService) {
+func makeStoreLevelDB(
+	b *testing.B,
+	dir string,
+) (ds.Datastore, ipld.DAGService) {
 	ldstore, err := lds.NewDatastore(dir, nil)
-	if err != nil {
-		panic(err)
-	}
-	// dstore := &batchWrap{ldstore}
+	require.NoError(b, err)
+
 	dstore := ldstore
 	bstore := blockstore.NewBlockstore(dstore)
 	bserv := bs.New(bstore, offline.Exchange(bstore))
@@ -28,11 +31,13 @@ func makeStoreLevelDB(dir string) (ds.Datastore, ipld.DAGService) {
 	return dstore, dserv
 }
 
-func makeStoreBadger(dir string) (ds.Datastore, ipld.DAGService) {
+func makeStoreBadger(
+	b *testing.B,
+	dir string,
+) (ds.Datastore, ipld.DAGService) {
 	bdstore, err := bds.NewDatastore(dir, nil)
-	if err != nil {
-		panic(err)
-	}
+	require.NoError(b, err)
+
 	dstore := &batchWrap{bdstore}
 	bstore := blockstore.NewBlockstore(dstore)
 	bserv := bs.New(bstore, offline.Exchange(bstore))
@@ -40,24 +45,28 @@ func makeStoreBadger(dir string) (ds.Datastore, ipld.DAGService) {
 	return dstore, dserv
 }
 
-func benchAutoSync(b *testing.B, N int, auto bool, dstore ds.Datastore, dserv ipld.DAGService) {
+func benchAutoSync(
+	b *testing.B,
+	N int,
+	auto bool,
+	dstore ds.Datastore,
+	dserv ipld.DAGService,
+) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	pinner, err := New(ctx, dstore, dserv)
-	if err != nil {
-		panic(err.Error())
-	}
+	require.NoError(b, err)
 
-	nodes := makeNodes(N, dserv)
+	nodes := makeNodes(b, N, dserv)
 
 	pinner.SetAutosync(auto)
-	pinNodes(nodes, pinner, true)
+	pinNodes(b, nodes, pinner, true)
 }
 
 func BenchmarkSyncOnceBadger(b *testing.B) {
 	const dsDir = "b-once"
-	dstoreB1, dservB1 := makeStoreBadger(dsDir)
+	dstoreB1, dservB1 := makeStoreBadger(b, dsDir)
 	defer os.RemoveAll(dsDir)
 	benchAutoSync(b, b.N, false, dstoreB1, dservB1)
 	dstoreB1.Close()
@@ -65,7 +74,7 @@ func BenchmarkSyncOnceBadger(b *testing.B) {
 
 func BenchmarkSyncEveryBadger(b *testing.B) {
 	const dsDir = "b-every"
-	dstoreB2, dservB2 := makeStoreBadger(dsDir)
+	dstoreB2, dservB2 := makeStoreBadger(b, dsDir)
 	defer os.RemoveAll(dsDir)
 	benchAutoSync(b, b.N, true, dstoreB2, dservB2)
 	dstoreB2.Close()
@@ -73,7 +82,7 @@ func BenchmarkSyncEveryBadger(b *testing.B) {
 
 func BenchmarkSyncOnceLevelDB(b *testing.B) {
 	const dsDir = "l-once"
-	dstoreL1, dservL1 := makeStoreLevelDB(dsDir)
+	dstoreL1, dservL1 := makeStoreLevelDB(b, dsDir)
 	defer os.RemoveAll(dsDir)
 	benchAutoSync(b, b.N, false, dstoreL1, dservL1)
 	dstoreL1.Close()
@@ -81,7 +90,7 @@ func BenchmarkSyncOnceLevelDB(b *testing.B) {
 
 func BenchmarkSyncEveryLevelDB(b *testing.B) {
 	const dsDir = "l-every"
-	dstoreL2, dservL2 := makeStoreLevelDB(dsDir)
+	dstoreL2, dservL2 := makeStoreLevelDB(b, dsDir)
 	defer os.RemoveAll(dsDir)
 	benchAutoSync(b, b.N, true, dstoreL2, dservL2)
 	dstoreL2.Close()
