@@ -4,29 +4,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"path"
 	"testing"
 	"time"
 
 	bs "github.com/ipfs/go-blockservice"
 	cid "github.com/ipfs/go-cid"
 	ds "github.com/ipfs/go-datastore"
-	"github.com/ipfs/go-datastore/query"
 	dssync "github.com/ipfs/go-datastore/sync"
 	lds "github.com/ipfs/go-ds-leveldb"
 	blockstore "github.com/ipfs/go-ipfs-blockstore"
 	offline "github.com/ipfs/go-ipfs-exchange-offline"
 	ipfspinner "github.com/ipfs/go-ipfs-pinner"
-	util "github.com/ipfs/go-ipfs-util"
 	ipld "github.com/ipfs/go-ipld-format"
 	logging "github.com/ipfs/go-log"
 	mdag "github.com/ipfs/go-merkledag"
 
 	"github.com/photon-storage/go-common/testing/require"
 )
-
-var rand = util.NewTimeSeededRand()
 
 type fakeLogger struct {
 	logging.StandardLogger
@@ -39,17 +33,6 @@ func (f *fakeLogger) Error(args ...interface{}) {
 
 func (f *fakeLogger) Errorf(format string, args ...interface{}) {
 	f.lastError = fmt.Errorf(format, args...)
-}
-
-func randNode() (*mdag.ProtoNode, cid.Cid) {
-	nd := new(mdag.ProtoNode)
-	nd.SetData(make([]byte, 32))
-	_, err := io.ReadFull(rand, nd.Data())
-	if err != nil {
-		panic(err)
-	}
-	k := nd.Cid()
-	return nd, k
 }
 
 func assertPinned(t *testing.T, p ipfspinner.Pinner, c cid.Cid) {
@@ -90,45 +73,41 @@ func TestPinnerBasic(t *testing.T) {
 	dstore := dssync.MutexWrap(ds.NewMapDatastore())
 	bstore := blockstore.NewBlockstore(dstore)
 	bserv := bs.New(bstore, offline.Exchange(bstore))
-
 	dserv := mdag.NewDAGService(bserv)
+	p := New(ctx, dstore, dserv)
 
-	p, err := New(ctx, dstore, dserv)
-	require.NoError(t, err)
-
-	a, ak := randNode()
+	a := rndNode(t)
 	require.NoError(t, dserv.Add(ctx, a))
 
 	// Pin A{}
 	require.NoError(t, p.Pin(ctx, a, false))
-	assertPinned(t, p, ak)
-	assertPinnedWithType(t, p, ak, ipfspinner.Direct)
+	assertPinned(t, p, a.Cid())
+	assertPinnedWithType(t, p, a.Cid(), ipfspinner.Direct)
 
 	// create new node c, to be indirectly pinned through b
-	c, _ := randNode()
+	c := rndNode(t)
 	require.NoError(t, dserv.Add(ctx, c))
-	ck := c.Cid()
 
 	// Create new node b, to be parent to a and c
-	b, _ := randNode()
+	b := rndNode(t)
 	require.NoError(t, b.AddNodeLink("child_a", a))
 	require.NoError(t, b.AddNodeLink("child_c", c))
 
 	require.NoError(t, dserv.Add(ctx, b))
-	bk := b.Cid()
 
 	// recursively pin B{A,C}
 	require.NoError(t, p.Pin(ctx, b, true))
 
-	assertPinned(t, p, bk)
-	assertPinned(t, p, ck)
-	assertPinnedWithType(t, p, bk, ipfspinner.Recursive)
-	assertPinnedWithType(t, p, ck, ipfspinner.Indirect)
+	assertPinned(t, p, b.Cid())
+	assertPinned(t, p, c.Cid())
 
-	d, _ := randNode()
+	assertPinnedWithType(t, p, b.Cid(), ipfspinner.Recursive)
+	assertPinnedWithType(t, p, c.Cid(), ipfspinner.Indirect)
+
+	d := rndNode(t)
 	require.NoError(t, d.AddNodeLink("a", a))
 	require.NoError(t, d.AddNodeLink("c", c))
-	e, _ := randNode()
+	e := rndNode(t)
 	require.NoError(t, d.AddNodeLink("e", e))
 
 	// Must be in dagserv for unpin to work
@@ -138,28 +117,27 @@ func TestPinnerBasic(t *testing.T) {
 	// Add D{A,C,E}
 	require.NoError(t, p.Pin(ctx, d, true))
 
-	dk := d.Cid()
-	assertPinned(t, p, dk)
+	assertPinned(t, p, d.Cid())
 
 	cids, err := p.RecursiveKeys(ctx)
 	require.NoError(t, err)
 	require.Equal(t, 2, len(cids))
-	require.True(t, bk == cids[0] || bk == cids[1])
-	require.True(t, dk == cids[0] || dk == cids[1])
+	require.True(t, b.Cid() == cids[0] || b.Cid() == cids[1])
+	require.True(t, d.Cid() == cids[0] || d.Cid() == cids[1])
 
-	pinned, err := p.CheckIfPinned(ctx, ak, bk, ck, dk)
+	pinned, err := p.CheckIfPinned(ctx, a.Cid(), b.Cid(), c.Cid(), d.Cid())
 	require.NoError(t, err)
 	require.Equal(t, 4, len(pinned))
 	for _, pn := range pinned {
 		switch pn.Key {
-		case ak:
+		case a.Cid():
 			require.Equal(t, ipfspinner.Direct, pn.Mode)
-		case bk:
+		case b.Cid():
 			require.Equal(t, ipfspinner.Recursive, pn.Mode)
-		case ck:
+		case c.Cid():
 			require.Equal(t, ipfspinner.Indirect, pn.Mode)
-			require.True(t, pn.Via == dk || pn.Via == bk)
-		case dk:
+			require.True(t, pn.Via == d.Cid() || pn.Via == b.Cid())
+		case d.Cid():
 			require.Equal(t, ipfspinner.Recursive, pn.Mode)
 		}
 	}
@@ -167,96 +145,41 @@ func TestPinnerBasic(t *testing.T) {
 	cids, err = p.DirectKeys(ctx)
 	require.NoError(t, err)
 	require.Equal(t, 1, len(cids))
-	require.Equal(t, ak, cids[0])
+	require.Equal(t, a.Cid(), cids[0])
 
 	cids, _ = p.InternalPins(ctx)
 	require.Equal(t, 0, len(cids))
 
 	require.ErrorContains(t,
 		"is pinned recursively",
-		p.Unpin(ctx, dk, false),
+		p.Unpin(ctx, d.Cid(), false),
 	)
 
 	// Test recursive unpin
-	require.NoError(t, p.Unpin(ctx, dk, true))
-	require.ErrorIs(t, ipfspinner.ErrNotPinned, p.Unpin(ctx, dk, true))
+	require.NoError(t, p.Unpin(ctx, d.Cid(), true))
+	require.ErrorIs(t, ipfspinner.ErrNotPinned, p.Unpin(ctx, d.Cid(), true))
 
 	require.NoError(t, p.Flush(ctx))
 
-	p, err = New(ctx, dstore, dserv)
-	require.NoError(t, err)
+	p = New(ctx, dstore, dserv)
 
 	// Test directly pinned
-	assertPinned(t, p, ak)
-	assertPinnedWithType(t, p, ak, ipfspinner.Direct)
+	assertPinned(t, p, a.Cid())
+	assertPinnedWithType(t, p, a.Cid(), ipfspinner.Direct)
 	// Test recursively pinned
-	assertPinned(t, p, bk)
-	assertPinnedWithType(t, p, bk, ipfspinner.Recursive)
-
-	// Remove the pin but not the index to simulate corruption
-	ids, err := p.cidDIdx.Search(ctx, ak.KeyString())
-	require.NoError(t, err)
-	require.Equal(t, 1, len(ids))
-	pp, err := p.loadPin(ctx, ids[0])
-	require.NoError(t, err)
-	require.Equal(t, ipfspinner.Direct, pp.Mode)
-	require.Equal(t, ak, pp.Cid)
-	require.NoError(t, p.dstore.Delete(ctx, pp.dsKey()))
-
-	realLog := log
-	fakeLog := &fakeLogger{}
-	fakeLog.StandardLogger = log
-	log = fakeLog
-	require.NoError(t, p.Pin(ctx, a, true))
-	if fakeLog.lastError == nil {
-		t.Error("expected error to be logged")
-	} else if fakeLog.lastError.Error() != "found CID index with missing pin" {
-		t.Error("did not get expected log message")
-	}
-
-	log = realLog
-}
-
-func TestAddLoadPin(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	dstore := dssync.MutexWrap(ds.NewMapDatastore())
-	bstore := blockstore.NewBlockstore(dstore)
-	bserv := bs.New(bstore, offline.Exchange(bstore))
-
-	dserv := mdag.NewDAGService(bserv)
-
-	p, err := New(ctx, dstore, dserv)
-	require.NoError(t, err)
-
-	a, ak := randNode()
-	require.NoError(t, dserv.Add(ctx, a))
-
-	mode := ipfspinner.Recursive
-	pid, err := p.addPin(ctx, ak, mode)
-	require.NoError(t, err)
-
-	// Load pin and check that data decoded correctly
-	pinData, err := p.loadPin(ctx, pid)
-	require.NoError(t, err)
-	require.Equal(t, mode, pinData.Mode)
-	require.Equal(t, ak, pinData.Cid)
+	assertPinned(t, p, b.Cid())
+	assertPinnedWithType(t, p, b.Cid(), ipfspinner.Recursive)
 }
 
 func TestIsPinnedLookup(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
 	dstore := dssync.MutexWrap(ds.NewMapDatastore())
 	bstore := blockstore.NewBlockstore(dstore)
 	bserv := bs.New(bstore, offline.Exchange(bstore))
-
 	dserv := mdag.NewDAGService(bserv)
-
-	// Create new pinner.  New will not load anything since there are
-	// no pins saved in the datastore yet.
-	p, err := New(ctx, dstore, dserv)
-	require.NoError(t, err)
+	p := New(ctx, dstore, dserv)
 
 	makeTree := func(
 		ctx context.Context,
@@ -269,7 +192,7 @@ func TestIsPinnedLookup(t *testing.T) {
 		aNodes := make([]*mdag.ProtoNode, aBranchLen)
 		aKeys := make([]cid.Cid, aBranchLen)
 		for i := 0; i < aBranchLen; i++ {
-			a, _ := randNode()
+			a := rndNode(t)
 			if i >= 1 {
 				require.NoError(t, a.AddNodeLink("child", aNodes[i-1]))
 			}
@@ -281,10 +204,10 @@ func TestIsPinnedLookup(t *testing.T) {
 		require.NoError(t, p.Pin(ctx, aNodes[aBranchLen-1], true))
 
 		// Create node B and add A3 as child
-		b, _ := randNode()
+		b := rndNode(t)
 		require.NoError(t, b.AddNodeLink("mychild", aNodes[3]))
 		// Create C node
-		c, _ := randNode()
+		c := rndNode(t)
 		// Add A0 as child of C
 		require.NoError(t, c.AddNodeLink("child", aNodes[0]))
 		// Add C
@@ -339,19 +262,79 @@ func TestIsPinnedLookup(t *testing.T) {
 	assertPinned(t, p, ck)
 }
 
-func TestDuplicateSemantics(t *testing.T) {
+func TestDuplicatedPins(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
 	dstore := dssync.MutexWrap(ds.NewMapDatastore())
 	bstore := blockstore.NewBlockstore(dstore)
 	bserv := bs.New(bstore, offline.Exchange(bstore))
-
 	dserv := mdag.NewDAGService(bserv)
+	p := New(ctx, dstore, dserv)
 
-	p, err := New(ctx, dstore, dserv)
-	require.NoError(t, err)
+	//   A    E
+	//  / \  /
+	// B   C
+	//      \
+	//       D
+	a := rndNode(t)
+	b := rndNode(t)
+	c := rndNode(t)
+	d := rndNode(t)
+	e := rndNode(t)
+	require.NoError(t, c.AddNodeLink("child_d", d))
+	require.NoError(t, a.AddNodeLink("child_b", b))
+	require.NoError(t, a.AddNodeLink("child_c", c))
+	require.NoError(t, e.AddNodeLink("child_c", c))
+	require.NoError(t, dserv.Add(ctx, a))
+	require.NoError(t, dserv.Add(ctx, b))
+	require.NoError(t, dserv.Add(ctx, c))
+	require.NoError(t, dserv.Add(ctx, d))
+	require.NoError(t, dserv.Add(ctx, e))
 
-	a, _ := randNode()
+	// a=3,c=1,e=1
+	require.NoError(t, p.Pin(ctx, c, false))
+	assertPinnedWithType(t, p, c.Cid(), ipfspinner.Direct)
+	require.NoError(t, p.Pin(ctx, a, false))
+	assertPinnedWithType(t, p, a.Cid(), ipfspinner.Direct)
+	require.NoError(t, p.Pin(ctx, a, true))
+	assertPinnedWithType(t, p, a.Cid(), ipfspinner.Recursive)
+	require.NoError(t, p.Pin(ctx, e, true))
+	assertPinnedWithType(t, p, e.Cid(), ipfspinner.Recursive)
+	require.NoError(t, p.Pin(ctx, a, true))
+	assertPinnedWithType(t, p, a.Cid(), ipfspinner.Recursive)
+
+	require.ErrorContains(t,
+		"is pinned recursively",
+		p.Unpin(ctx, a.Cid(), false),
+	)
+	require.NoError(t, p.Unpin(ctx, a.Cid(), true))
+	assertPinnedWithType(t, p, a.Cid(), ipfspinner.Recursive)
+	require.NoError(t, p.Unpin(ctx, a.Cid(), true))
+	assertPinnedWithType(t, p, a.Cid(), ipfspinner.Recursive)
+	require.NoError(t, p.Unpin(ctx, a.Cid(), true))
+	assertUnpinned(t, p, a.Cid())
+	assertUnpinned(t, p, b.Cid())
+	assertPinnedWithType(t, p, c.Cid(), ipfspinner.Direct)
+	require.NoError(t, p.Unpin(ctx, c.Cid(), false))
+	assertPinnedWithType(t, p, c.Cid(), ipfspinner.Indirect)
+	require.NoError(t, p.Unpin(ctx, e.Cid(), true))
+	assertUnpinned(t, p, e.Cid())
+	assertUnpinned(t, p, c.Cid())
+	assertUnpinned(t, p, d.Cid())
+}
+
+func TestPinModeConflictSemantics(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	dstore := dssync.MutexWrap(ds.NewMapDatastore())
+	bstore := blockstore.NewBlockstore(dstore)
+	bserv := bs.New(bstore, offline.Exchange(bstore))
+	dserv := mdag.NewDAGService(bserv)
+	p := New(ctx, dstore, dserv)
+
+	a := rndNode(t)
 	require.NoError(t, dserv.Add(ctx, a))
 
 	// pin is recursively
@@ -370,33 +353,31 @@ func TestDuplicateSemantics(t *testing.T) {
 func TestFlush(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
 	dstore := dssync.MutexWrap(ds.NewMapDatastore())
 	bstore := blockstore.NewBlockstore(dstore)
 	bserv := bs.New(bstore, offline.Exchange(bstore))
-
 	dserv := mdag.NewDAGService(bserv)
-	p, err := New(ctx, dstore, dserv)
-	require.NoError(t, err)
-	_, k := randNode()
+	p := New(ctx, dstore, dserv)
 
-	require.NoError(t, p.PinWithMode(ctx, k, ipfspinner.Recursive))
+	c := rndNode(t).Cid()
+	require.NoError(t, p.PinWithMode(ctx, c, ipfspinner.Recursive))
 	require.NoError(t, p.Flush(ctx))
-	assertPinned(t, p, k)
+	assertPinned(t, p, c)
 }
 
 func TestPinRecursiveFail(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
 	dstore := dssync.MutexWrap(ds.NewMapDatastore())
 	bstore := blockstore.NewBlockstore(dstore)
 	bserv := bs.New(bstore, offline.Exchange(bstore))
 	dserv := mdag.NewDAGService(bserv)
+	p := New(ctx, dstore, dserv)
 
-	p, err := New(ctx, dstore, dserv)
-	require.NoError(t, err)
-
-	a, _ := randNode()
-	b, _ := randNode()
+	a := rndNode(t)
+	b := rndNode(t)
 	require.NoError(t, a.AddNodeLink("child", b))
 
 	// NOTE: This isnt a time based test, we expect the pin to fail
@@ -413,89 +394,37 @@ func TestPinRecursiveFail(t *testing.T) {
 	require.NoError(t, p.Pin(mctx, a, true))
 }
 
-func TestLoadDirty(t *testing.T) {
+func TestCidIndex(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	dstore := dssync.MutexWrap(ds.NewMapDatastore())
-	bstore := blockstore.NewBlockstore(dstore)
-	bserv := bs.New(bstore, offline.Exchange(bstore))
-	dserv := mdag.NewDAGService(bserv)
+	dstore, dserv := makeStore(t)
+	pinner := New(ctx, dstore, dserv)
+	nodes := makeNodes(t, 1, dserv)
+	node := nodes[0]
 
-	p, err := New(ctx, dstore, dserv)
+	// Pin the cid
+	require.NoError(t, pinner.Pin(ctx, node, true))
+
+	t.Log("Added pin:", node.Cid().String())
+
+	// Check that the index exists
+	cnt, err := pinner.cidRIdx.get(ctx, node.Cid())
 	require.NoError(t, err)
-	require.True(t, p.SetAutosync(false))
-	require.False(t, p.SetAutosync(false))
-	require.False(t, p.SetAutosync(true))
+	require.Equal(t, uint16(1), cnt)
 
-	a, ak := randNode()
-	require.NoError(t, dserv.Add(ctx, a))
-	require.NoError(t, p.Pin(ctx, a, true))
-
-	cidAKey := ak.KeyString()
-	_, bk := randNode()
-	cidBKey := bk.KeyString()
-
-	// Corrupt index
-	cidRIndex := p.cidRIdx
-	require.NoError(t, cidRIndex.delKey(ctx, cidAKey))
-	require.NoError(t, cidRIndex.add(ctx, cidBKey, "not-a-pin-id"))
-
-	// Force dirty, since Pin syncs automatically
-	p.setDirty(ctx)
-
-	// Verify dirty
-	data, err := dstore.Get(ctx, dirtyKey)
-	require.NoError(t, err)
-	require.Equal(t, byte(1), data[0])
-
-	has, err := cidRIndex.HasAny(ctx, cidAKey)
-	require.NoError(t, err)
-	require.False(t, has)
-
-	// Create new pinner on same datastore that was never flushed. This should
-	// detect the dirty flag and repair the indexes.
-	p, err = New(ctx, dstore, dserv)
-	require.NoError(t, err)
-
-	// Verify not dirty
-	data, err = dstore.Get(ctx, dirtyKey)
-	require.NoError(t, err)
-	require.Equal(t, byte(0), data[0])
-
-	// Verify index rebuilt
-	cidRIndex = p.cidRIdx
-	has, err = cidRIndex.HasAny(ctx, cidAKey)
-	require.NoError(t, err)
-	require.True(t, has)
-
-	removed, err := p.removePinsForCid(ctx, bk, ipfspinner.Any)
-	require.NoError(t, err)
-	require.True(t, removed)
-}
-
-func TestEncodeDecodePin(t *testing.T) {
-	_, c := randNode()
-
-	pin := newPin(c, ipfspinner.Recursive)
-	pin.Metadata = make(map[string]interface{}, 2)
-	pin.Metadata["hello"] = "world"
-	pin.Metadata["foo"] = "bar"
-
-	encBytes, err := encodePin(pin)
-	require.NoError(t, err)
-
-	decPin, err := decodePin(pin.Id, encBytes)
-	require.NoError(t, err)
-
-	require.Equal(t, pin.Id, decPin.Id)
-	require.Equal(t, pin.Cid, decPin.Cid)
-	require.Equal(t, pin.Mode, decPin.Mode)
-	for key, val := range pin.Metadata {
-		dval, ok := decPin.Metadata[key]
-		require.True(t, ok)
-		require.Equal(t, val.(string), dval.(string))
-	}
+	// Iterate values of index
+	var seen bool
+	require.NoError(t, pinner.cidRIdx.forEach(
+		ctx,
+		func(c cid.Cid, cnt uint16) (bool, error) {
+			require.False(t, seen)
+			require.Equal(t, node.Cid(), c)
+			require.Equal(t, uint16(1), cnt)
+			seen = true
+			return true, nil
+		},
+	))
 }
 
 func makeNodes(
@@ -508,7 +437,7 @@ func makeNodes(
 
 	nodes := make([]ipld.Node, count)
 	for i := 0; i < count; i++ {
-		n, _ := randNode()
+		n := rndNode(t)
 		require.NoError(t, dserv.Add(ctx, n))
 		nodes[i] = n
 	}
@@ -561,45 +490,12 @@ func makeStore(t require.TestingTB) (ds.Datastore, ipld.DAGService) {
 	return dstore, mdag.NewDAGService(bserv)
 }
 
-// BenchmarkLoadRebuild loads a pinner that has some number of saved pins, and
-// compares the load time when rebuilding indexes to loading without rebuilding
-// indexes.
-func BenchmarkLoad(b *testing.B) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	dstore, dserv := makeStore(b)
-	pinner, err := New(ctx, dstore, dserv)
-	require.NoError(b, err)
-
-	nodes := makeNodes(b, 4096, dserv)
-	pinNodes(b, nodes, pinner, true)
-
-	b.Run("RebuildTrue", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
-			require.NoError(b, dstore.Put(ctx, dirtyKey, []byte{1}))
-
-			_, err := New(ctx, dstore, dserv)
-			require.NoError(b, err)
-		}
-	})
-
-	b.Run("RebuildFalse", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
-			require.NoError(b, dstore.Put(ctx, dirtyKey, []byte{0}))
-			_, err := New(ctx, dstore, dserv)
-			require.NoError(b, err)
-		}
-	})
-}
-
 // BenchmarkNthPins shows the time it takes to create/save 1 pin when a number
 // of other pins already exist.  Each run in the series shows performance for
 // creating a pin in a larger number of existing pins.
 func BenchmarkNthPin(b *testing.B) {
 	dstore, dserv := makeStore(b)
-	pinner, err := New(context.Background(), dstore, dserv)
-	require.NoError(b, err)
+	pinner := New(context.Background(), dstore, dserv)
 
 	for count := 1000; count <= 10000; count += 1000 {
 		b.Run(fmt.Sprint("PinDS-", count), func(b *testing.B) {
@@ -640,8 +536,7 @@ func BenchmarkNPins(b *testing.B) {
 	for count := 128; count < 16386; count <<= 1 {
 		b.Run(fmt.Sprint("PinDS-", count), func(b *testing.B) {
 			dstore, dserv := makeStore(b)
-			pinner, err := New(context.Background(), dstore, dserv)
-			require.NoError(b, err)
+			pinner := New(context.Background(), dstore, dserv)
 			benchmarkNPins(b, count, pinner, dserv)
 		})
 	}
@@ -679,8 +574,7 @@ func BenchmarkNUnpins(b *testing.B) {
 	for count := 128; count < 16386; count <<= 1 {
 		b.Run(fmt.Sprint("UnpinDS-", count), func(b *testing.B) {
 			dstore, dserv := makeStore(b)
-			pinner, err := New(context.Background(), dstore, dserv)
-			require.NoError(b, err)
+			pinner := New(context.Background(), dstore, dserv)
 			benchmarkNUnpins(b, count, pinner, dserv)
 		})
 	}
@@ -718,8 +612,7 @@ func BenchmarkPinAll(b *testing.B) {
 	for count := 128; count < 16386; count <<= 1 {
 		b.Run(fmt.Sprint("PinAllDS-", count), func(b *testing.B) {
 			dstore, dserv := makeStore(b)
-			pinner, err := New(context.Background(), dstore, dserv)
-			require.NoError(b, err)
+			pinner := New(context.Background(), dstore, dserv)
 			benchmarkPinAll(b, count, pinner, dserv)
 		})
 	}
@@ -741,169 +634,4 @@ func benchmarkPinAll(
 		unpinNodes(b, nodes, pinner)
 		b.StartTimer()
 	}
-}
-
-func BenchmarkRebuild(b *testing.B) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	dstore, dserv := makeStore(b)
-	pinIncr := 32768
-
-	for pins := pinIncr; pins <= pinIncr*5; pins += pinIncr {
-		pinner, err := New(ctx, dstore, dserv)
-		require.NoError(b, err)
-		nodes := makeNodes(b, pinIncr, dserv)
-		pinNodes(b, nodes, pinner, true)
-
-		b.Run(fmt.Sprintf("Rebuild %d", pins), func(b *testing.B) {
-			b.ReportAllocs()
-			for i := 0; i < b.N; i++ {
-				require.NoError(b, dstore.Put(ctx, dirtyKey, []byte{1}))
-				_, err = New(ctx, dstore, dserv)
-				require.NoError(b, err)
-			}
-		})
-	}
-}
-
-func TestCidIndex(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	dstore, dserv := makeStore(t)
-	pinner, err := New(ctx, dstore, dserv)
-	require.NoError(t, err)
-	nodes := makeNodes(t, 1, dserv)
-	node := nodes[0]
-
-	c := node.Cid()
-	cidKey := c.KeyString()
-
-	// Pin the cid
-	pid, err := pinner.addPin(ctx, c, ipfspinner.Recursive)
-	require.NoError(t, err)
-
-	t.Log("Added pin:", pid)
-	t.Log("CID index:", c.String(), "-->", pid)
-
-	// Check that the index exists
-	has, err := pinner.cidRIdx.HasAny(ctx, cidKey)
-	require.NoError(t, err)
-	require.True(t, has)
-
-	// Check that searching for the cid returns a value
-	values, err := pinner.cidRIdx.Search(ctx, cidKey)
-	require.NoError(t, err)
-	require.Equal(t, 1, len(values))
-	require.Equal(t, pid, values[0])
-
-	// Check that index has specific value
-	has, err = pinner.cidRIdx.HasValue(ctx, cidKey, pid)
-	require.NoError(t, err)
-	require.True(t, has)
-
-	// Iterate values of index
-	var seen bool
-	require.NoError(t, pinner.cidRIdx.forEach(
-		ctx,
-		"",
-		func(key, value string) (bool, error) {
-			require.False(t, seen)
-			require.Equal(t, cidKey, key)
-			require.Equal(t, pid, value)
-			seen = true
-			return true, nil
-		},
-	))
-
-	// Load all pins from the datastore.
-	q := query.Query{
-		Prefix: pinKeyPath,
-	}
-	results, err := pinner.dstore.Query(ctx, q)
-	require.NoError(t, err)
-	defer results.Close()
-
-	// Iterate all pins and check if the corresponding recursive or direct
-	// index is missing.  If the index is missing then create the index.
-	seen = false
-	for r := range results.Next() {
-		require.False(t, seen)
-		require.NoError(t, r.Error)
-		ent := r.Entry
-		pp, err := decodePin(path.Base(ent.Key), ent.Value)
-		require.NoError(t, err)
-		t.Log("Found pin:", pp.Id)
-		require.Equal(t, pid, pp.Id)
-		seen = true
-	}
-}
-
-func TestRebuild(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	dstore, dserv := makeStore(t)
-	pinner, err := New(ctx, dstore, dserv)
-	require.NoError(t, err)
-	nodes := makeNodes(t, 3, dserv)
-	pinNodes(t, nodes, pinner, true)
-
-	c1 := nodes[0].Cid()
-	cid1Key := c1.KeyString()
-	c2 := nodes[1].Cid()
-	cid2Key := c2.KeyString()
-	c3 := nodes[2].Cid()
-	cid3Key := c3.KeyString()
-
-	// Get pin IDs
-	values, err := pinner.cidRIdx.Search(ctx, cid1Key)
-	require.NoError(t, err)
-	pid1 := values[0]
-	values, err = pinner.cidRIdx.Search(ctx, cid2Key)
-	require.NoError(t, err)
-	pid2 := values[0]
-	values, err = pinner.cidRIdx.Search(ctx, cid3Key)
-	require.NoError(t, err)
-	pid3 := values[0]
-
-	// Corrupt by adding direct index when there is already a recursive index
-	require.NoError(t, pinner.cidDIdx.add(ctx, cid1Key, pid1))
-
-	// Corrupt index by deleting cid index 2 to simulate an incomplete
-	// add or delete
-	require.NoError(t, pinner.cidRIdx.delKey(ctx, cid2Key))
-
-	// Corrupt index by deleting pin to simulate corruption
-	pp, err := pinner.loadPin(ctx, pid3)
-	require.NoError(t, err)
-	require.NoError(t, pinner.dstore.Delete(ctx, pp.dsKey()))
-
-	pinner.setDirty(ctx)
-
-	// Rebuild indexes
-	pinner, err = New(ctx, dstore, dserv)
-	require.NoError(t, err)
-
-	// Verify that indexes have same values as before
-	verifyIndexValue(t, ctx, pinner, cid1Key, pid1)
-	verifyIndexValue(t, ctx, pinner, cid2Key, pid2)
-	verifyIndexValue(t, ctx, pinner, cid3Key, pid3)
-}
-
-func verifyIndexValue(
-	t *testing.T,
-	ctx context.Context,
-	pinner *pinner,
-	cidKey string,
-	expectedPid string,
-) {
-	values, err := pinner.cidRIdx.Search(ctx, cidKey)
-	require.NoError(t, err)
-	require.Equal(t, 1, len(values))
-	require.Equal(t, expectedPid, values[0])
-	has, err := pinner.cidDIdx.HasAny(ctx, cidKey)
-	require.NoError(t, err)
-	require.False(t, has)
 }
