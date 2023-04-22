@@ -9,29 +9,19 @@ import (
 	ds "github.com/ipfs/go-datastore"
 	ipfspinner "github.com/ipfs/go-ipfs-pinner"
 	ipld "github.com/ipfs/go-ipld-format"
-	logging "github.com/ipfs/go-log"
 	"github.com/ipfs/go-merkledag"
 )
 
 const (
 	basePath   = "/pins"
 	rIndexPath = "/pins/idx_r"
-	dIndexPath = "/pins/idx_d"
 )
 
 var (
-	log logging.StandardLogger = logging.Logger("pin")
-
-	linkDirect, linkRecursive string
+	linkRecursive string
 )
 
 func init() {
-	directStr, ok := ipfspinner.ModeToString(ipfspinner.Direct)
-	if !ok {
-		panic("could not find Direct pin enum")
-	}
-	linkDirect = directStr
-
 	recursiveStr, ok := ipfspinner.ModeToString(ipfspinner.Recursive)
 	if !ok {
 		panic("could not find Recursive pin enum")
@@ -58,7 +48,6 @@ func (d *noSyncDAGService) Sync() error {
 type pinner struct {
 	dstore   ds.Datastore
 	dserv    syncDAGService
-	cidDIdx  *index
 	cidRIdx  *index
 	autoSync bool
 	clean    int64
@@ -83,7 +72,6 @@ func New(
 	}
 	return &pinner{
 		autoSync: true,
-		cidDIdx:  newIndex(dstore, ds.NewKey(dIndexPath)),
 		cidRIdx:  newIndex(dstore, ds.NewKey(rIndexPath)),
 		dserv:    syncDserv,
 		dstore:   dstore,
@@ -114,7 +102,7 @@ func (p *pinner) Pin(
 	if recursive {
 		return p.doPinRecursive(ctx, nd.Cid(), true)
 	} else {
-		return p.doPinDirect(ctx, nd.Cid())
+		return ErrDirectPinUnsupported
 	}
 }
 
@@ -123,40 +111,24 @@ func (p *pinner) doPinRecursive(
 	c cid.Cid,
 	fetch bool,
 ) error {
-	newPin, err := func() (bool, error) {
+	if err := func() error {
 		p.mu.Lock()
 		defer p.mu.Unlock()
 
-		// Convert direct index to resursive index if needed.
-		dcnt, err := p.cidDIdx.get(ctx, c)
-		if err != nil {
-			return false, err
-		}
-
-		// NOTE(kmax): the dec and inc is not atomic and can cause leak.
-		if dcnt > 0 {
-			if _, err := p.cidDIdx.dec(ctx, c, dcnt); err != nil {
-				return false, err
-			}
-		}
-
-		rcnt, err := p.cidRIdx.inc(ctx, c, dcnt+1)
-		if err != nil {
-			return false, err
+		if _, err := p.cidRIdx.inc(ctx, c, 1); err != nil {
+			return err
 		}
 
 		if err := p.flushPins(ctx, false); err != nil {
-			return false, err
+			return err
 		}
 
-		return rcnt == dcnt+1, nil
-	}()
-
-	if err != nil {
+		return nil
+	}(); err != nil {
 		return err
 	}
 
-	if !newPin || !fetch {
+	if !fetch {
 		return nil
 	}
 
@@ -173,61 +145,32 @@ func (p *pinner) doPinRecursive(
 	return nil
 }
 
-func (p *pinner) doPinDirect(ctx context.Context, c cid.Cid) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	// Convert direct index to resursive index if needed.
-	rcnt, err := p.cidRIdx.get(ctx, c)
-	if err != nil {
-		return err
-	}
-	if rcnt > 0 {
-		return fmt.Errorf("%s already pinned recursively", c.String())
-	}
-
-	if _, err := p.cidDIdx.inc(ctx, c, 1); err != nil {
-		return err
-	}
-
-	if err := p.flushPins(ctx, false); err != nil {
-		return err
-	}
-
-	return nil
-}
-
 // Unpin a given key
 func (p *pinner) Unpin(ctx context.Context, c cid.Cid, recursive bool) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	if !recursive {
+		return ErrDirectPinUnsupported
+	}
+
 	rcnt, err := p.cidRIdx.get(ctx, c)
 	if err != nil {
+		if err == ds.ErrNotFound {
+			return ipfspinner.ErrNotPinned
+		}
 		return err
 	}
-	if rcnt > 0 {
-		if !recursive {
-			return fmt.Errorf("%s is pinned recursively", c.String())
-		}
-		if _, err := p.cidRIdx.dec(ctx, c, 1); err != nil {
-			return err
-		}
-		return p.flushPins(ctx, false)
+
+	if rcnt == 0 {
+		// This won't happen! Just in case.
+		return ipfspinner.ErrNotPinned
 	}
 
-	dcnt, err := p.cidDIdx.get(ctx, c)
-	if err != nil {
+	if _, err := p.cidRIdx.dec(ctx, c, 1); err != nil {
 		return err
 	}
-	if dcnt > 0 {
-		if _, err := p.cidDIdx.dec(ctx, c, 1); err != nil {
-			return err
-		}
-		return p.flushPins(ctx, false)
-	}
-
-	return ipfspinner.ErrNotPinned
+	return p.flushPins(ctx, false)
 }
 
 // IsPinned returns whether or not the given key is pinned
@@ -270,12 +213,6 @@ func (p *pinner) isPinnedWithType(
 		return "", false, nil
 
 	case ipfspinner.Direct:
-		dcnt, err := p.cidDIdx.get(ctx, c)
-		if err != nil {
-			return "", false, err
-		} else if dcnt > 0 {
-			return linkDirect, true, nil
-		}
 		return "", false, nil
 
 	case ipfspinner.Internal:
@@ -289,12 +226,6 @@ func (p *pinner) isPinnedWithType(
 			return "", false, err
 		} else if rcnt > 0 {
 			return linkRecursive, true, nil
-		}
-		dcnt, err := p.cidDIdx.get(ctx, c)
-		if err != nil {
-			return "", false, err
-		} else if dcnt > 0 {
-			return linkDirect, true, nil
 		}
 		// Continue to check indirect.
 
@@ -316,7 +247,7 @@ func (p *pinner) isPinnedWithType(
 
 	// No index for given CID, so search children of all recursive pinned CIDs
 	var has bool
-	var rc cid.Cid
+	var k cid.Cid
 	if err := p.cidRIdx.forEach(
 		ctx,
 		func(rc cid.Cid, _ uint16) (bool, error) {
@@ -330,7 +261,9 @@ func (p *pinner) isPinnedWithType(
 			); err != nil {
 				return false, err
 			}
-
+			if has {
+				k = rc
+			}
 			return !has, nil
 		},
 	); err != nil {
@@ -338,7 +271,7 @@ func (p *pinner) isPinnedWithType(
 	}
 
 	if has {
-		return rc.String(), true, nil
+		return k.String(), true, nil
 	}
 
 	return "", false, nil
@@ -368,18 +301,7 @@ func (p *pinner) CheckIfPinned(
 				Key:  c,
 				Mode: ipfspinner.Recursive,
 			})
-		}
-		dcnt, err := p.cidDIdx.get(ctx, c)
-		if err != nil {
-			return nil, err
-		} else if dcnt > 0 {
-			pinned = append(pinned, ipfspinner.Pinned{
-				Key:  c,
-				Mode: ipfspinner.Direct,
-			})
-		}
-
-		if rcnt == 0 && dcnt == 0 {
+		} else {
 			toCheck.Add(c)
 		}
 	}
@@ -432,10 +354,7 @@ func (p *pinner) CheckIfPinned(
 
 // DirectKeys returns a slice containing the directly pinned keys
 func (p *pinner) DirectKeys(ctx context.Context) ([]cid.Cid, error) {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-
-	return getIndexKeys(ctx, p.cidDIdx)
+	return nil, nil
 }
 
 // RecursiveKeys returns a slice containing the recursively pinned keys
@@ -478,7 +397,7 @@ func (p *pinner) Update(
 	to cid.Cid,
 	unpin bool,
 ) error {
-	return ErrNotSupported
+	return ErrUpdateUnsupported
 }
 
 func (p *pinner) flushDagService(ctx context.Context, force bool) error {
@@ -529,7 +448,7 @@ func (p *pinner) PinWithMode(
 	case ipfspinner.Recursive:
 		return p.doPinRecursive(ctx, c, false)
 	case ipfspinner.Direct:
-		return p.doPinDirect(ctx, c)
+		return ErrDirectPinUnsupported
 	default:
 		return fmt.Errorf("unrecognized pin mode")
 	}

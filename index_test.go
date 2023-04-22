@@ -94,4 +94,9 @@ func TestIndex(t *testing.T) {
 	require.Equal(t, 2, len(m))
 	require.Equal(t, uint16(2), m[c1])
 	require.Equal(t, uint16(3), m[c2])
+
+	_, err = idx.dec(ctx, c1, 3)
+	require.ErrorIs(t, ErrPinCountUnderflow, err)
+	_, err = idx.inc(ctx, c2, 65533)
+	require.ErrorIs(t, ErrPinCountOverflow, err)
 }

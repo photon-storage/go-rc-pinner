@@ -53,6 +53,10 @@ func (x *index) inc(
 		val = val[:0]
 	}
 
+	if int64(cnt)+int64(v) > 65535 {
+		return 0, ErrPinCountOverflow
+	}
+
 	cnt += v
 	val = encodeCount(val, cnt)
 
@@ -84,8 +88,8 @@ func (x *index) dec(
 		return 0, err
 	}
 
-	if cnt == 0 {
-		panic("unexpected ref count 0")
+	if int64(cnt)-int64(v) < 0 {
+		return 0, ErrPinCountUnderflow
 	}
 	cnt -= v
 
