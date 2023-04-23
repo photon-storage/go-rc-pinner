@@ -29,7 +29,7 @@ func init() {
 	linkRecursive = recursiveStr
 }
 
-var _ ipfspinner.Pinner = (*pinner)(nil)
+var _ ipfspinner.Pinner = (*RcPinner)(nil)
 
 type syncDAGService interface {
 	ipld.DAGService
@@ -44,8 +44,8 @@ func (d *noSyncDAGService) Sync() error {
 	return nil
 }
 
-// pinner implements the Pinner interface
-type pinner struct {
+// RcPinner implements the Pinner interface
+type RcPinner struct {
 	dstore   ds.Datastore
 	dserv    syncDAGService
 	cidRIdx  *index
@@ -65,12 +65,12 @@ func New(
 	ctx context.Context,
 	dstore ds.Datastore,
 	dserv ipld.DAGService,
-) *pinner {
+) *RcPinner {
 	syncDserv, ok := dserv.(syncDAGService)
 	if !ok {
 		syncDserv = &noSyncDAGService{dserv}
 	}
-	return &pinner{
+	return &RcPinner{
 		autoSync: true,
 		cidRIdx:  newIndex(dstore, ds.NewKey(rIndexPath)),
 		dserv:    syncDserv,
@@ -81,7 +81,7 @@ func New(
 // SetAutosync allows auto-syncing to be enabled or disabled during runtime.
 // This may be used to turn off autosync before doing many repeated pinning
 // operations, and then turn it on after.  Returns the previous value.
-func (p *pinner) SetAutosync(auto bool) bool {
+func (p *RcPinner) SetAutosync(auto bool) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -90,7 +90,7 @@ func (p *pinner) SetAutosync(auto bool) bool {
 }
 
 // Pin the given node, optionally recursive
-func (p *pinner) Pin(
+func (p *RcPinner) Pin(
 	ctx context.Context,
 	nd ipld.Node,
 	recursive bool,
@@ -106,7 +106,7 @@ func (p *pinner) Pin(
 	}
 }
 
-func (p *pinner) doPinRecursive(
+func (p *RcPinner) doPinRecursive(
 	ctx context.Context,
 	c cid.Cid,
 	fetch bool,
@@ -146,7 +146,7 @@ func (p *pinner) doPinRecursive(
 }
 
 // Unpin a given key
-func (p *pinner) Unpin(ctx context.Context, c cid.Cid, recursive bool) error {
+func (p *RcPinner) Unpin(ctx context.Context, c cid.Cid, recursive bool) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -175,7 +175,7 @@ func (p *pinner) Unpin(ctx context.Context, c cid.Cid, recursive bool) error {
 
 // IsPinned returns whether or not the given key is pinned
 // and an explanation of why its pinned
-func (p *pinner) IsPinned(
+func (p *RcPinner) IsPinned(
 	ctx context.Context,
 	c cid.Cid,
 ) (string, bool, error) {
@@ -186,7 +186,7 @@ func (p *pinner) IsPinned(
 
 // IsPinnedWithType returns whether or not the given cid is pinned with the
 // given pin type, as well as returning the type of pin its pinned with.
-func (p *pinner) IsPinnedWithType(
+func (p *RcPinner) IsPinnedWithType(
 	ctx context.Context,
 	c cid.Cid,
 	mode ipfspinner.Mode,
@@ -197,7 +197,7 @@ func (p *pinner) IsPinnedWithType(
 	return p.isPinnedWithType(ctx, c, mode)
 }
 
-func (p *pinner) isPinnedWithType(
+func (p *RcPinner) isPinnedWithType(
 	ctx context.Context,
 	c cid.Cid,
 	mode ipfspinner.Mode,
@@ -281,7 +281,7 @@ func (p *pinner) isPinnedWithType(
 // calling IsPinned for each key, returns the pinned status of cid(s)
 //
 // TODO: If a CID is pinned by multiple pins, should they all be reported?
-func (p *pinner) CheckIfPinned(
+func (p *RcPinner) CheckIfPinned(
 	ctx context.Context,
 	cids ...cid.Cid,
 ) ([]ipfspinner.Pinned, error) {
@@ -353,12 +353,12 @@ func (p *pinner) CheckIfPinned(
 }
 
 // DirectKeys returns a slice containing the directly pinned keys
-func (p *pinner) DirectKeys(ctx context.Context) ([]cid.Cid, error) {
+func (p *RcPinner) DirectKeys(ctx context.Context) ([]cid.Cid, error) {
 	return nil, nil
 }
 
 // RecursiveKeys returns a slice containing the recursively pinned keys
-func (p *pinner) RecursiveKeys(ctx context.Context) ([]cid.Cid, error) {
+func (p *RcPinner) RecursiveKeys(ctx context.Context) ([]cid.Cid, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
@@ -387,11 +387,11 @@ func getIndexKeys(
 
 // InternalPins returns all cids kept pinned for the internal state of the
 // pinner
-func (p *pinner) InternalPins(ctx context.Context) ([]cid.Cid, error) {
+func (p *RcPinner) InternalPins(ctx context.Context) ([]cid.Cid, error) {
 	return nil, nil
 }
 
-func (p *pinner) Update(
+func (p *RcPinner) Update(
 	ctx context.Context,
 	from cid.Cid,
 	to cid.Cid,
@@ -400,7 +400,7 @@ func (p *pinner) Update(
 	return ErrUpdateUnsupported
 }
 
-func (p *pinner) flushDagService(ctx context.Context, force bool) error {
+func (p *RcPinner) flushDagService(ctx context.Context, force bool) error {
 	if !p.autoSync && !force {
 		return nil
 	}
@@ -412,7 +412,7 @@ func (p *pinner) flushDagService(ctx context.Context, force bool) error {
 	return nil
 }
 
-func (p *pinner) flushPins(ctx context.Context, force bool) error {
+func (p *RcPinner) flushPins(ctx context.Context, force bool) error {
 	if !p.autoSync && !force {
 		return nil
 	}
@@ -425,7 +425,7 @@ func (p *pinner) flushPins(ctx context.Context, force bool) error {
 }
 
 // Flush encodes and writes pinner keysets to the datastore
-func (p *pinner) Flush(ctx context.Context) error {
+func (p *RcPinner) Flush(ctx context.Context) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -439,7 +439,7 @@ func (p *pinner) Flush(ctx context.Context) error {
 
 // PinWithMode allows the user to have fine grained control over pin
 // counts
-func (p *pinner) PinWithMode(
+func (p *RcPinner) PinWithMode(
 	ctx context.Context,
 	c cid.Cid,
 	mode ipfspinner.Mode,
