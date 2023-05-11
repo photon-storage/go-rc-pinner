@@ -80,10 +80,16 @@ func TestPinnerBasic(t *testing.T) {
 	require.NoError(t, dserv.Add(ctx, a))
 
 	// Pin A{}
+	cnt, err := p.PinnedCount(ctx, a.Cid())
+	require.NoError(t, err)
+	require.Equal(t, uint16(0), cnt)
 	require.ErrorIs(t, ErrDirectPinUnsupported, p.Pin(ctx, a, false))
 	require.NoError(t, p.Pin(ctx, a, true))
 	assertPinned(t, p, a.Cid())
 	assertPinnedWithType(t, p, a.Cid(), ipfspinner.Recursive)
+	cnt, err = p.PinnedCount(ctx, a.Cid())
+	require.NoError(t, err)
+	require.Equal(t, uint16(1), cnt)
 
 	// create new node c, to be indirectly pinned through b
 	c := rndNode(t)
@@ -97,13 +103,23 @@ func TestPinnerBasic(t *testing.T) {
 	require.NoError(t, dserv.Add(ctx, b))
 
 	// recursively pin B{A,C}
+	cnt, err = p.PinnedCount(ctx, b.Cid())
+	require.NoError(t, err)
+	require.Equal(t, uint16(0), cnt)
+	cnt, err = p.PinnedCount(ctx, c.Cid())
+	require.NoError(t, err)
+	require.Equal(t, uint16(0), cnt)
 	require.NoError(t, p.Pin(ctx, b, true))
-
 	assertPinned(t, p, b.Cid())
-	assertPinned(t, p, c.Cid())
-
 	assertPinnedWithType(t, p, b.Cid(), ipfspinner.Recursive)
+	cnt, err = p.PinnedCount(ctx, b.Cid())
+	require.NoError(t, err)
+	require.Equal(t, uint16(1), cnt)
+	assertPinned(t, p, c.Cid())
 	assertPinnedWithType(t, p, c.Cid(), ipfspinner.Indirect)
+	cnt, err = p.PinnedCount(ctx, c.Cid())
+	require.NoError(t, err)
+	require.Equal(t, uint16(0), cnt)
 
 	d := rndNode(t)
 	require.NoError(t, d.AddNodeLink("a", a))
@@ -116,9 +132,14 @@ func TestPinnerBasic(t *testing.T) {
 	require.NoError(t, dserv.Add(ctx, d))
 
 	// Add D{A,C,E}
+	cnt, err = p.PinnedCount(ctx, d.Cid())
+	require.NoError(t, err)
+	require.Equal(t, uint16(0), cnt)
 	require.NoError(t, p.Pin(ctx, d, true))
-
 	assertPinned(t, p, d.Cid())
+	cnt, err = p.PinnedCount(ctx, d.Cid())
+	require.NoError(t, err)
+	require.Equal(t, uint16(1), cnt)
 
 	cids, err := p.RecursiveKeys(ctx)
 	require.NoError(t, err)
@@ -166,6 +187,26 @@ func TestPinnerBasic(t *testing.T) {
 	assertPinnedWithType(t, p, a.Cid(), ipfspinner.Recursive)
 	assertPinned(t, p, b.Cid())
 	assertPinnedWithType(t, p, b.Cid(), ipfspinner.Recursive)
+
+	// Make ref count greater than 1
+	require.NoError(t, p.Pin(ctx, a, true))
+	require.NoError(t, p.Pin(ctx, b, true))
+
+	cnt, err = p.PinnedCount(ctx, a.Cid())
+	require.NoError(t, err)
+	require.Equal(t, uint16(2), cnt)
+	cnt, err = p.PinnedCount(ctx, b.Cid())
+	require.NoError(t, err)
+	require.Equal(t, uint16(2), cnt)
+	cnt, err = p.PinnedCount(ctx, c.Cid())
+	require.NoError(t, err)
+	require.Equal(t, uint16(0), cnt)
+	cnt, err = p.PinnedCount(ctx, d.Cid())
+	require.NoError(t, err)
+	require.Equal(t, uint16(0), cnt)
+	cnt, err = p.PinnedCount(ctx, e.Cid())
+	require.NoError(t, err)
+	require.Equal(t, uint16(0), cnt)
 }
 
 func TestIsPinnedLookup(t *testing.T) {
