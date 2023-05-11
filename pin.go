@@ -454,6 +454,27 @@ func (p *RcPinner) PinWithMode(
 	}
 }
 
+// PinnedCount returns the reference count pinned in the index for the
+// given CID. The API looks up only the exact CID given in the index.
+// It does not check descendent recursively.
+func (p *RcPinner) PinnedCount(
+	ctx context.Context,
+	c cid.Cid,
+) (uint16, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	rcnt, err := p.cidRIdx.get(ctx, c)
+	if err != nil {
+		if err == ds.ErrNotFound {
+			return 0, nil
+		}
+		return 0, err
+	}
+
+	return rcnt, nil
+}
+
 // hasChild recursively looks for a Cid among the children of a root Cid.
 // The visit function can be used to shortcut already-visited branches.
 func hasChild(
