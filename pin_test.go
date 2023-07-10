@@ -74,7 +74,8 @@ func TestPinnerBasic(t *testing.T) {
 	bstore := blockstore.NewBlockstore(dstore)
 	bserv := bs.New(bstore, offline.Exchange(bstore))
 	dserv := mdag.NewDAGService(bserv)
-	p := New(ctx, dstore, dserv)
+	p, err := New(ctx, dstore, dserv)
+	require.NoError(t, err)
 
 	a := rndNode(t)
 	require.NoError(t, dserv.Add(ctx, a))
@@ -180,7 +181,8 @@ func TestPinnerBasic(t *testing.T) {
 
 	require.NoError(t, p.Flush(ctx))
 
-	p = New(ctx, dstore, dserv)
+	p, err = New(ctx, dstore, dserv)
+	require.NoError(t, err)
 
 	// Test recursively pinned
 	assertPinned(t, p, a.Cid())
@@ -217,7 +219,8 @@ func TestIsPinnedLookup(t *testing.T) {
 	bstore := blockstore.NewBlockstore(dstore)
 	bserv := bs.New(bstore, offline.Exchange(bstore))
 	dserv := mdag.NewDAGService(bserv)
-	p := New(ctx, dstore, dserv)
+	p, err := New(ctx, dstore, dserv)
+	require.NoError(t, err)
 
 	makeTree := func(
 		ctx context.Context,
@@ -308,7 +311,8 @@ func TestDuplicatedPins(t *testing.T) {
 	bstore := blockstore.NewBlockstore(dstore)
 	bserv := bs.New(bstore, offline.Exchange(bstore))
 	dserv := mdag.NewDAGService(bserv)
-	p := New(ctx, dstore, dserv)
+	p, err := New(ctx, dstore, dserv)
+	require.NoError(t, err)
 
 	//   A    E
 	//  / \  /
@@ -368,7 +372,8 @@ func TestFlush(t *testing.T) {
 	bstore := blockstore.NewBlockstore(dstore)
 	bserv := bs.New(bstore, offline.Exchange(bstore))
 	dserv := mdag.NewDAGService(bserv)
-	p := New(ctx, dstore, dserv)
+	p, err := New(ctx, dstore, dserv)
+	require.NoError(t, err)
 
 	c := rndNode(t).Cid()
 	require.NoError(t, p.PinWithMode(ctx, c, ipfspinner.Recursive))
@@ -384,7 +389,8 @@ func TestPinRecursiveFail(t *testing.T) {
 	bstore := blockstore.NewBlockstore(dstore)
 	bserv := bs.New(bstore, offline.Exchange(bstore))
 	dserv := mdag.NewDAGService(bserv)
-	p := New(ctx, dstore, dserv)
+	p, err := New(ctx, dstore, dserv)
+	require.NoError(t, err)
 
 	a := rndNode(t)
 	b := rndNode(t)
@@ -409,7 +415,8 @@ func TestCidIndex(t *testing.T) {
 	defer cancel()
 
 	dstore, dserv := makeStore(t)
-	pinner := New(ctx, dstore, dserv)
+	pinner, err := New(ctx, dstore, dserv)
+	require.NoError(t, err)
 	nodes := makeNodes(t, 1, dserv)
 	node := nodes[0]
 
@@ -504,7 +511,8 @@ func makeStore(t require.TestingTB) (ds.Datastore, ipld.DAGService) {
 // creating a pin in a larger number of existing pins.
 func BenchmarkNthPin(b *testing.B) {
 	dstore, dserv := makeStore(b)
-	pinner := New(context.Background(), dstore, dserv)
+	pinner, err := New(context.Background(), dstore, dserv)
+	require.NoError(b, err)
 
 	for count := 1000; count <= 10000; count += 1000 {
 		b.Run(fmt.Sprint("PinDS-", count), func(b *testing.B) {
@@ -545,7 +553,8 @@ func BenchmarkNPins(b *testing.B) {
 	for count := 128; count < 16386; count <<= 1 {
 		b.Run(fmt.Sprint("PinDS-", count), func(b *testing.B) {
 			dstore, dserv := makeStore(b)
-			pinner := New(context.Background(), dstore, dserv)
+			pinner, err := New(context.Background(), dstore, dserv)
+			require.NoError(b, err)
 			benchmarkNPins(b, count, pinner, dserv)
 		})
 	}
@@ -583,7 +592,8 @@ func BenchmarkNUnpins(b *testing.B) {
 	for count := 128; count < 16386; count <<= 1 {
 		b.Run(fmt.Sprint("UnpinDS-", count), func(b *testing.B) {
 			dstore, dserv := makeStore(b)
-			pinner := New(context.Background(), dstore, dserv)
+			pinner, err := New(context.Background(), dstore, dserv)
+			require.NoError(b, err)
 			benchmarkNUnpins(b, count, pinner, dserv)
 		})
 	}
@@ -621,7 +631,8 @@ func BenchmarkPinAll(b *testing.B) {
 	for count := 128; count < 16386; count <<= 1 {
 		b.Run(fmt.Sprint("PinAllDS-", count), func(b *testing.B) {
 			dstore, dserv := makeStore(b)
-			pinner := New(context.Background(), dstore, dserv)
+			pinner, err := New(context.Background(), dstore, dserv)
+			require.NoError(b, err)
 			benchmarkPinAll(b, count, pinner, dserv)
 		})
 	}

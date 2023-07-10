@@ -65,17 +65,21 @@ func New(
 	ctx context.Context,
 	dstore ds.Datastore,
 	dserv ipld.DAGService,
-) *RcPinner {
+) (*RcPinner, error) {
 	syncDserv, ok := dserv.(syncDAGService)
 	if !ok {
 		syncDserv = &noSyncDAGService{dserv}
 	}
+	cidRIdx, err := newIndex(ctx, dstore, ds.NewKey(rIndexPath))
+	if err != nil {
+		return nil, err
+	}
 	return &RcPinner{
 		autoSync: true,
-		cidRIdx:  newIndex(dstore, ds.NewKey(rIndexPath)),
+		cidRIdx:  cidRIdx,
 		dserv:    syncDserv,
 		dstore:   dstore,
-	}
+	}, nil
 }
 
 // SetAutosync allows auto-syncing to be enabled or disabled during runtime.
@@ -473,6 +477,14 @@ func (p *RcPinner) PinnedCount(
 	}
 
 	return rcnt, nil
+}
+
+// TotalPinnedCount returns total reference count pinned in the index.
+func (p *RcPinner) TotalPinnedCount() uint64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	return p.cidRIdx.totalCount()
 }
 
 // hasChild recursively looks for a Cid among the children of a root Cid.
