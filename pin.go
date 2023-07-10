@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/ipfs/boxo/ipld/merkledag"
+	pin "github.com/ipfs/boxo/pinning/pinner"
 	"github.com/ipfs/go-cid"
 	ds "github.com/ipfs/go-datastore"
-	ipfspinner "github.com/ipfs/go-ipfs-pinner"
 	ipld "github.com/ipfs/go-ipld-format"
-	"github.com/ipfs/go-merkledag"
 )
 
 const (
@@ -22,14 +22,14 @@ var (
 )
 
 func init() {
-	recursiveStr, ok := ipfspinner.ModeToString(ipfspinner.Recursive)
+	recursiveStr, ok := pin.ModeToString(pin.Recursive)
 	if !ok {
 		panic("could not find Recursive pin enum")
 	}
 	linkRecursive = recursiveStr
 }
 
-var _ ipfspinner.Pinner = (*RcPinner)(nil)
+var _ pin.Pinner = (*RcPinner)(nil)
 
 type syncDAGService interface {
 	ipld.DAGService
@@ -161,14 +161,14 @@ func (p *RcPinner) Unpin(ctx context.Context, c cid.Cid, recursive bool) error {
 	rcnt, err := p.cidRIdx.get(ctx, c)
 	if err != nil {
 		if err == ds.ErrNotFound {
-			return ipfspinner.ErrNotPinned
+			return pin.ErrNotPinned
 		}
 		return err
 	}
 
 	if rcnt == 0 {
 		// This won't happen! Just in case.
-		return ipfspinner.ErrNotPinned
+		return pin.ErrNotPinned
 	}
 
 	if _, err := p.cidRIdx.dec(ctx, c, 1); err != nil {
@@ -185,7 +185,7 @@ func (p *RcPinner) IsPinned(
 ) (string, bool, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return p.isPinnedWithType(ctx, c, ipfspinner.Any)
+	return p.isPinnedWithType(ctx, c, pin.Any)
 }
 
 // IsPinnedWithType returns whether or not the given cid is pinned with the
@@ -193,7 +193,7 @@ func (p *RcPinner) IsPinned(
 func (p *RcPinner) IsPinnedWithType(
 	ctx context.Context,
 	c cid.Cid,
-	mode ipfspinner.Mode,
+	mode pin.Mode,
 ) (string, bool, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -204,10 +204,10 @@ func (p *RcPinner) IsPinnedWithType(
 func (p *RcPinner) isPinnedWithType(
 	ctx context.Context,
 	c cid.Cid,
-	mode ipfspinner.Mode,
+	mode pin.Mode,
 ) (string, bool, error) {
 	switch mode {
-	case ipfspinner.Recursive:
+	case pin.Recursive:
 		rcnt, err := p.cidRIdx.get(ctx, c)
 		if err != nil {
 			return "", false, err
@@ -216,15 +216,15 @@ func (p *RcPinner) isPinnedWithType(
 		}
 		return "", false, nil
 
-	case ipfspinner.Direct:
+	case pin.Direct:
 		return "", false, nil
 
-	case ipfspinner.Internal:
+	case pin.Internal:
 		return "", false, nil
 
-	case ipfspinner.Indirect:
+	case pin.Indirect:
 
-	case ipfspinner.Any:
+	case pin.Any:
 		rcnt, err := p.cidRIdx.get(ctx, c)
 		if err != nil {
 			return "", false, err
@@ -238,11 +238,11 @@ func (p *RcPinner) isPinnedWithType(
 			fmt.Errorf(
 				"invalid Pin Mode '%d', must be one of {%d, %d, %d, %d, %d}",
 				mode,
-				ipfspinner.Direct,
-				ipfspinner.Indirect,
-				ipfspinner.Recursive,
-				ipfspinner.Internal,
-				ipfspinner.Any,
+				pin.Direct,
+				pin.Indirect,
+				pin.Recursive,
+				pin.Internal,
+				pin.Any,
 			)
 	}
 
@@ -288,8 +288,8 @@ func (p *RcPinner) isPinnedWithType(
 func (p *RcPinner) CheckIfPinned(
 	ctx context.Context,
 	cids ...cid.Cid,
-) ([]ipfspinner.Pinned, error) {
-	pinned := make([]ipfspinner.Pinned, 0, len(cids))
+) ([]pin.Pinned, error) {
+	pinned := make([]pin.Pinned, 0, len(cids))
 	toCheck := cid.NewSet()
 
 	p.mu.RLock()
@@ -301,9 +301,9 @@ func (p *RcPinner) CheckIfPinned(
 		if err != nil {
 			return nil, err
 		} else if rcnt > 0 {
-			pinned = append(pinned, ipfspinner.Pinned{
+			pinned = append(pinned, pin.Pinned{
 				Key:  c,
-				Mode: ipfspinner.Recursive,
+				Mode: pin.Recursive,
 			})
 		} else {
 			toCheck.Add(c)
@@ -324,9 +324,9 @@ func (p *RcPinner) CheckIfPinned(
 					}
 
 					if toCheck.Has(c) {
-						pinned = append(pinned, ipfspinner.Pinned{
+						pinned = append(pinned, pin.Pinned{
 							Key:  c,
-							Mode: ipfspinner.Indirect,
+							Mode: pin.Indirect,
 							Via:  rc,
 						})
 						toCheck.Remove(c)
@@ -347,9 +347,9 @@ func (p *RcPinner) CheckIfPinned(
 
 	// Anything left in toCheck is not pinned
 	for _, k := range toCheck.Keys() {
-		pinned = append(pinned, ipfspinner.Pinned{
+		pinned = append(pinned, pin.Pinned{
 			Key:  k,
-			Mode: ipfspinner.NotPinned,
+			Mode: pin.NotPinned,
 		})
 	}
 
@@ -357,42 +357,50 @@ func (p *RcPinner) CheckIfPinned(
 }
 
 // DirectKeys returns a slice containing the directly pinned keys
-func (p *RcPinner) DirectKeys(ctx context.Context) ([]cid.Cid, error) {
-	return nil, nil
+func (p *RcPinner) DirectKeys(ctx context.Context) <-chan pin.StreamedCid {
+	out := make(chan pin.StreamedCid)
+	close(out)
+	return out
 }
 
 // RecursiveKeys returns a slice containing the recursively pinned keys
-func (p *RcPinner) RecursiveKeys(ctx context.Context) ([]cid.Cid, error) {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
+func (p *RcPinner) RecursiveKeys(ctx context.Context) <-chan pin.StreamedCid {
+	out := make(chan pin.StreamedCid)
+	go func() {
+		p.mu.RLock()
+		defer p.mu.RUnlock()
+		defer close(out)
 
-	return getIndexKeys(ctx, p.cidRIdx)
-}
+		cidSet := cid.NewSet()
+		if err := p.cidRIdx.forEach(
+			ctx,
+			func(c cid.Cid, cnt uint16) (bool, error) {
+				if cidSet.Has(c) || cnt == 0 {
+					return true, nil
+				}
 
-func getIndexKeys(
-	ctx context.Context,
-	idx *index,
-) ([]cid.Cid, error) {
-	cidSet := cid.NewSet()
-	if err := idx.forEach(
-		ctx,
-		func(c cid.Cid, cnt uint16) (bool, error) {
-			if cnt > 0 {
+				select {
+				case <-ctx.Done():
+					return false, nil
+				case out <- pin.StreamedCid{C: c}:
+				}
 				cidSet.Add(c)
-			}
-			return true, nil
-		},
-	); err != nil {
-		return nil, err
-	}
+				return true, nil
+			},
+		); err != nil {
+			out <- pin.StreamedCid{Err: err}
+		}
+	}()
 
-	return cidSet.Keys(), nil
+	return out
 }
 
 // InternalPins returns all cids kept pinned for the internal state of the
 // pinner
-func (p *RcPinner) InternalPins(ctx context.Context) ([]cid.Cid, error) {
-	return nil, nil
+func (p *RcPinner) InternalPins(ctx context.Context) <-chan pin.StreamedCid {
+	out := make(chan pin.StreamedCid)
+	close(out)
+	return out
 }
 
 func (p *RcPinner) Update(
@@ -446,12 +454,12 @@ func (p *RcPinner) Flush(ctx context.Context) error {
 func (p *RcPinner) PinWithMode(
 	ctx context.Context,
 	c cid.Cid,
-	mode ipfspinner.Mode,
+	mode pin.Mode,
 ) error {
 	switch mode {
-	case ipfspinner.Recursive:
+	case pin.Recursive:
 		return p.doPinRecursive(ctx, c, false)
-	case ipfspinner.Direct:
+	case pin.Direct:
 		return ErrDirectPinUnsupported
 	default:
 		return fmt.Errorf("unrecognized pin mode")

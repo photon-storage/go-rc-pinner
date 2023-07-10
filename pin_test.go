@@ -7,17 +7,17 @@ import (
 	"testing"
 	"time"
 
-	bs "github.com/ipfs/go-blockservice"
+	bs "github.com/ipfs/boxo/blockservice"
+	blockstore "github.com/ipfs/boxo/blockstore"
+	offline "github.com/ipfs/boxo/exchange/offline"
+	mdag "github.com/ipfs/boxo/ipld/merkledag"
+	pin "github.com/ipfs/boxo/pinning/pinner"
 	cid "github.com/ipfs/go-cid"
 	ds "github.com/ipfs/go-datastore"
 	dssync "github.com/ipfs/go-datastore/sync"
 	lds "github.com/ipfs/go-ds-leveldb"
-	blockstore "github.com/ipfs/go-ipfs-blockstore"
-	offline "github.com/ipfs/go-ipfs-exchange-offline"
-	ipfspinner "github.com/ipfs/go-ipfs-pinner"
 	ipld "github.com/ipfs/go-ipld-format"
 	logging "github.com/ipfs/go-log"
-	mdag "github.com/ipfs/go-merkledag"
 
 	"github.com/photon-storage/go-common/testing/require"
 )
@@ -35,7 +35,7 @@ func (f *fakeLogger) Errorf(format string, args ...interface{}) {
 	f.lastError = fmt.Errorf(format, args...)
 }
 
-func assertPinned(t *testing.T, p ipfspinner.Pinner, c cid.Cid) {
+func assertPinned(t *testing.T, p pin.Pinner, c cid.Cid) {
 	_, pinned, err := p.IsPinned(context.Background(), c)
 	require.NoError(t, err)
 	require.True(t, pinned)
@@ -43,24 +43,24 @@ func assertPinned(t *testing.T, p ipfspinner.Pinner, c cid.Cid) {
 
 func assertPinnedWithType(
 	t *testing.T,
-	p ipfspinner.Pinner,
+	p pin.Pinner,
 	c cid.Cid,
-	mode ipfspinner.Mode,
+	mode pin.Mode,
 ) {
 	modeText, pinned, err := p.IsPinnedWithType(context.Background(), c, mode)
 	require.NoError(t, err)
 	require.True(t, pinned)
 
-	if mode == ipfspinner.Any || mode == ipfspinner.Indirect {
+	if mode == pin.Any || mode == pin.Indirect {
 		return
 	}
 
-	expect, ok := ipfspinner.ModeToString(mode)
+	expect, ok := pin.ModeToString(mode)
 	require.True(t, ok)
 	require.Equal(t, expect, modeText)
 }
 
-func assertUnpinned(t *testing.T, p ipfspinner.Pinner, c cid.Cid) {
+func assertUnpinned(t *testing.T, p pin.Pinner, c cid.Cid) {
 	_, pinned, err := p.IsPinned(context.Background(), c)
 	require.NoError(t, err)
 	require.False(t, pinned)
@@ -87,7 +87,7 @@ func TestPinnerBasic(t *testing.T) {
 	require.ErrorIs(t, ErrDirectPinUnsupported, p.Pin(ctx, a, false))
 	require.NoError(t, p.Pin(ctx, a, true))
 	assertPinned(t, p, a.Cid())
-	assertPinnedWithType(t, p, a.Cid(), ipfspinner.Recursive)
+	assertPinnedWithType(t, p, a.Cid(), pin.Recursive)
 	cnt, err = p.PinnedCount(ctx, a.Cid())
 	require.NoError(t, err)
 	require.Equal(t, uint16(1), cnt)
@@ -112,12 +112,12 @@ func TestPinnerBasic(t *testing.T) {
 	require.Equal(t, uint16(0), cnt)
 	require.NoError(t, p.Pin(ctx, b, true))
 	assertPinned(t, p, b.Cid())
-	assertPinnedWithType(t, p, b.Cid(), ipfspinner.Recursive)
+	assertPinnedWithType(t, p, b.Cid(), pin.Recursive)
 	cnt, err = p.PinnedCount(ctx, b.Cid())
 	require.NoError(t, err)
 	require.Equal(t, uint16(1), cnt)
 	assertPinned(t, p, c.Cid())
-	assertPinnedWithType(t, p, c.Cid(), ipfspinner.Indirect)
+	assertPinnedWithType(t, p, c.Cid(), pin.Indirect)
 	cnt, err = p.PinnedCount(ctx, c.Cid())
 	require.NoError(t, err)
 	require.Equal(t, uint16(0), cnt)
@@ -142,8 +142,7 @@ func TestPinnerBasic(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint16(1), cnt)
 
-	cids, err := p.RecursiveKeys(ctx)
-	require.NoError(t, err)
+	cids := readCh(t, p.RecursiveKeys(ctx))
 	require.Equal(t, 3, len(cids))
 	m := map[cid.Cid]bool{}
 	for _, c := range cids {
@@ -158,18 +157,18 @@ func TestPinnerBasic(t *testing.T) {
 	require.Equal(t, 4, len(pinned))
 	for _, pn := range pinned {
 		if pn.Key == c.Cid() {
-			require.Equal(t, ipfspinner.Indirect, pn.Mode)
+			require.Equal(t, pin.Indirect, pn.Mode)
 			require.True(t, pn.Via == d.Cid() || pn.Via == b.Cid())
 		} else {
-			require.Equal(t, ipfspinner.Recursive, pn.Mode)
+			require.Equal(t, pin.Recursive, pn.Mode)
 		}
 	}
 
-	cids, err = p.DirectKeys(ctx)
+	cids = readCh(t, p.DirectKeys(ctx))
 	require.NoError(t, err)
 	require.Equal(t, 0, len(cids))
 
-	cids, err = p.InternalPins(ctx)
+	cids = readCh(t, p.InternalPins(ctx))
 	require.NoError(t, err)
 	require.Equal(t, 0, len(cids))
 
@@ -177,7 +176,7 @@ func TestPinnerBasic(t *testing.T) {
 
 	// Test recursive unpin
 	require.NoError(t, p.Unpin(ctx, d.Cid(), true))
-	require.ErrorIs(t, ipfspinner.ErrNotPinned, p.Unpin(ctx, d.Cid(), true))
+	require.ErrorIs(t, pin.ErrNotPinned, p.Unpin(ctx, d.Cid(), true))
 
 	require.NoError(t, p.Flush(ctx))
 
@@ -186,9 +185,9 @@ func TestPinnerBasic(t *testing.T) {
 
 	// Test recursively pinned
 	assertPinned(t, p, a.Cid())
-	assertPinnedWithType(t, p, a.Cid(), ipfspinner.Recursive)
+	assertPinnedWithType(t, p, a.Cid(), pin.Recursive)
 	assertPinned(t, p, b.Cid())
-	assertPinnedWithType(t, p, b.Cid(), ipfspinner.Recursive)
+	assertPinnedWithType(t, p, b.Cid(), pin.Recursive)
 
 	// Make ref count greater than 1
 	require.NoError(t, p.Pin(ctx, a, true))
@@ -226,7 +225,7 @@ func TestIsPinnedLookup(t *testing.T) {
 		ctx context.Context,
 		aBranchLen int,
 		dserv ipld.DAGService,
-		p ipfspinner.Pinner,
+		p pin.Pinner,
 	) ([]cid.Cid, cid.Cid, cid.Cid) {
 		require.True(t, aBranchLen >= 3)
 
@@ -336,27 +335,27 @@ func TestDuplicatedPins(t *testing.T) {
 
 	// a=2,c=1,e=1
 	require.NoError(t, p.Pin(ctx, a, true))
-	assertPinnedWithType(t, p, a.Cid(), ipfspinner.Recursive)
+	assertPinnedWithType(t, p, a.Cid(), pin.Recursive)
 	require.NoError(t, p.Pin(ctx, c, true))
-	assertPinnedWithType(t, p, c.Cid(), ipfspinner.Recursive)
+	assertPinnedWithType(t, p, c.Cid(), pin.Recursive)
 	require.NoError(t, p.Pin(ctx, e, true))
-	assertPinnedWithType(t, p, e.Cid(), ipfspinner.Recursive)
+	assertPinnedWithType(t, p, e.Cid(), pin.Recursive)
 	require.NoError(t, p.Pin(ctx, a, true))
-	assertPinnedWithType(t, p, a.Cid(), ipfspinner.Recursive)
-	assertPinnedWithType(t, p, b.Cid(), ipfspinner.Indirect)
-	assertPinnedWithType(t, p, d.Cid(), ipfspinner.Indirect)
+	assertPinnedWithType(t, p, a.Cid(), pin.Recursive)
+	assertPinnedWithType(t, p, b.Cid(), pin.Indirect)
+	assertPinnedWithType(t, p, d.Cid(), pin.Indirect)
 
 	require.NoError(t, p.Unpin(ctx, a.Cid(), true))
-	assertPinnedWithType(t, p, a.Cid(), ipfspinner.Recursive)
-	assertPinnedWithType(t, p, b.Cid(), ipfspinner.Indirect)
+	assertPinnedWithType(t, p, a.Cid(), pin.Recursive)
+	assertPinnedWithType(t, p, b.Cid(), pin.Indirect)
 	require.NoError(t, p.Unpin(ctx, a.Cid(), true))
 	assertUnpinned(t, p, a.Cid())
 	assertUnpinned(t, p, b.Cid())
-	require.ErrorIs(t, ipfspinner.ErrNotPinned, p.Unpin(ctx, a.Cid(), true))
+	require.ErrorIs(t, pin.ErrNotPinned, p.Unpin(ctx, a.Cid(), true))
 
-	assertPinnedWithType(t, p, c.Cid(), ipfspinner.Recursive)
+	assertPinnedWithType(t, p, c.Cid(), pin.Recursive)
 	require.NoError(t, p.Unpin(ctx, c.Cid(), true))
-	assertPinnedWithType(t, p, c.Cid(), ipfspinner.Indirect)
+	assertPinnedWithType(t, p, c.Cid(), pin.Indirect)
 
 	require.NoError(t, p.Unpin(ctx, e.Cid(), true))
 	assertUnpinned(t, p, e.Cid())
@@ -376,7 +375,7 @@ func TestFlush(t *testing.T) {
 	require.NoError(t, err)
 
 	c := rndNode(t).Cid()
-	require.NoError(t, p.PinWithMode(ctx, c, ipfspinner.Recursive))
+	require.NoError(t, p.PinWithMode(ctx, c, pin.Recursive))
 	require.NoError(t, p.Flush(ctx))
 	assertPinned(t, p, c)
 }
@@ -464,7 +463,7 @@ func makeNodes(
 func pinNodes(
 	t require.TestingTB,
 	nodes []ipld.Node,
-	p ipfspinner.Pinner,
+	p pin.Pinner,
 ) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -478,7 +477,7 @@ func pinNodes(
 func unpinNodes(
 	t require.TestingTB,
 	nodes []ipld.Node,
-	p ipfspinner.Pinner,
+	p pin.Pinner,
 ) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -524,7 +523,7 @@ func BenchmarkNthPin(b *testing.B) {
 func benchmarkNthPin(
 	b *testing.B,
 	count int,
-	pinner ipfspinner.Pinner,
+	pinner pin.Pinner,
 	dserv ipld.DAGService,
 ) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -563,7 +562,7 @@ func BenchmarkNPins(b *testing.B) {
 func benchmarkNPins(
 	b *testing.B,
 	count int,
-	pinner ipfspinner.Pinner,
+	pinner pin.Pinner,
 	dserv ipld.DAGService,
 ) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -602,7 +601,7 @@ func BenchmarkNUnpins(b *testing.B) {
 func benchmarkNUnpins(
 	b *testing.B,
 	count int,
-	pinner ipfspinner.Pinner,
+	pinner pin.Pinner,
 	dserv ipld.DAGService,
 ) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -641,7 +640,7 @@ func BenchmarkPinAll(b *testing.B) {
 func benchmarkPinAll(
 	b *testing.B,
 	count int,
-	pinner ipfspinner.Pinner,
+	pinner pin.Pinner,
 	dserv ipld.DAGService,
 ) {
 	nodes := makeNodes(b, count, dserv)
@@ -654,4 +653,13 @@ func benchmarkPinAll(
 		unpinNodes(b, nodes, pinner)
 		b.StartTimer()
 	}
+}
+
+func readCh(t *testing.T, ch <-chan pin.StreamedCid) []cid.Cid {
+	var arr []cid.Cid
+	for re := range ch {
+		require.NoError(t, re.Err)
+		arr = append(arr, re.C)
+	}
+	return arr
 }
