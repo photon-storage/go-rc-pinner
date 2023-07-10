@@ -13,8 +13,13 @@ import (
 	"github.com/multiformats/go-multibase"
 )
 
+const (
+	totalCountKey = "metadata:tc"
+)
+
 type index struct {
-	dstore ds.Datastore
+	dstore  ds.Datastore
+	totalRc uint64
 }
 
 // newIndex creates a new datastore index. All indexes are stored under
@@ -22,10 +27,33 @@ type index struct {
 //
 // To persist the actions of calling index functions, it is necessary to
 // call dstore.Sync.
-func newIndex(dstore ds.Datastore, prefix ds.Key) *index {
-	return &index{
+func newIndex(
+	ctx context.Context,
+	dstore ds.Datastore,
+	prefix ds.Key,
+) (*index, error) {
+	idx := &index{
 		dstore: namespace.Wrap(dstore, prefix),
 	}
+
+	cnt, err := idx.readTotalCount(ctx)
+	if err == ds.ErrNotFound {
+		// Upgrade existing index.
+		if err := idx.forEach(
+			ctx,
+			func(_ cid.Cid, v uint16) (bool, error) {
+				cnt += uint64(v)
+				return true, nil
+			},
+		); err != nil {
+			return nil, err
+		}
+	} else if err != nil {
+		return nil, err
+	}
+
+	idx.totalRc = cnt
+	return idx, nil
 }
 
 func (x *index) inc(
@@ -58,9 +86,13 @@ func (x *index) inc(
 	}
 
 	cnt += v
-	val = encodeCount(val, cnt)
+	val = encodeCountWithAppend(val, cnt)
 
 	if err := x.dstore.Put(ctx, key, val); err != nil {
+		return 0, err
+	}
+
+	if err := x.updateTotalCount(ctx, int64(v)); err != nil {
 		return 0, err
 	}
 
@@ -94,12 +126,18 @@ func (x *index) dec(
 	cnt -= v
 
 	if cnt == 0 {
-		return 0, x.dstore.Delete(ctx, key)
+		if err := x.dstore.Delete(ctx, key); err != nil {
+			return 0, err
+		}
 	} else {
-		val = encodeCount(val[:0], cnt)
+		val = encodeCountWithAppend(val[:0], cnt)
 		if err := x.dstore.Put(ctx, key, val); err != nil {
 			return 0, err
 		}
+	}
+
+	if err := x.updateTotalCount(ctx, -int64(v)); err != nil {
+		return 0, err
 	}
 
 	return cnt, nil
@@ -148,7 +186,12 @@ func (x *index) forEach(
 				"error advancing index query result: %v", r.Error)
 		}
 
-		c, err := decodeKey(path.Base(r.Entry.Key))
+		k := path.Base(r.Entry.Key)
+		if k == totalCountKey {
+			continue
+		}
+
+		c, err := decodeKey(k)
 		if err != nil {
 			return fmt.Errorf("error decoding cid: %v", err)
 		}
@@ -171,7 +214,30 @@ func (x *index) forEach(
 	return nil
 }
 
-func encodeCount(b []byte, cnt uint16) []byte {
+func (x *index) totalCount() uint64 {
+	return x.totalRc
+}
+
+func (x *index) readTotalCount(ctx context.Context) (uint64, error) {
+	v, err := x.dstore.Get(ctx, ds.NewKey(totalCountKey))
+	if err != nil {
+		return 0, err
+	}
+
+	return decodeCount64(v)
+}
+
+func (x *index) updateTotalCount(ctx context.Context, v int64) error {
+	if v > 0 {
+		x.totalRc += uint64(v)
+	} else {
+		x.totalRc -= uint64(-v)
+	}
+	val := encodeCount64(make([]byte, 8), x.totalRc)
+	return x.dstore.Put(ctx, ds.NewKey(totalCountKey), val)
+}
+
+func encodeCountWithAppend(b []byte, cnt uint16) []byte {
 	return binary.LittleEndian.AppendUint16(b, cnt)
 }
 
@@ -181,6 +247,19 @@ func decodeCount(v []byte) (uint16, error) {
 	}
 
 	return binary.LittleEndian.Uint16(v), nil
+}
+
+func encodeCount64(b []byte, cnt uint64) []byte {
+	binary.LittleEndian.PutUint64(b, cnt)
+	return b
+}
+
+func decodeCount64(v []byte) (uint64, error) {
+	if len(v) != 8 {
+		return 0, ErrInvalidValue
+	}
+
+	return binary.LittleEndian.Uint64(v), nil
 }
 
 func encodeKey(c cid.Cid) string {
