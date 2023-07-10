@@ -5,10 +5,10 @@ import (
 	"io"
 	"testing"
 
+	mdag "github.com/ipfs/boxo/ipld/merkledag"
+	"github.com/ipfs/boxo/util"
 	"github.com/ipfs/go-cid"
 	ds "github.com/ipfs/go-datastore"
-	util "github.com/ipfs/go-ipfs-util"
-	mdag "github.com/ipfs/go-merkledag"
 
 	"github.com/photon-storage/go-common/testing/require"
 )
