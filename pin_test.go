@@ -18,6 +18,7 @@ import (
 	lds "github.com/ipfs/go-ds-leveldb"
 	ipld "github.com/ipfs/go-ipld-format"
 	logging "github.com/ipfs/go-log"
+	"go.uber.org/atomic"
 
 	"github.com/photon-storage/go-common/testing/require"
 )
@@ -441,6 +442,39 @@ func TestCidIndex(t *testing.T) {
 			return true, nil
 		},
 	))
+}
+
+func TestSizeStats(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	dstore := dssync.MutexWrap(ds.NewMapDatastore())
+	bstore := blockstore.NewBlockstore(dstore)
+	bserv := bs.New(bstore, offline.Exchange(bstore))
+	dserv := mdag.NewDAGService(bserv)
+	p, err := New(ctx, dstore, dserv)
+	require.NoError(t, err)
+
+	a := rndNode(t)
+	b := rndNode(t)
+	c := rndNode(t)
+	require.NoError(t, a.AddNodeLink("child_b", b))
+	require.NoError(t, a.AddNodeLink("child_c", c))
+	require.NoError(t, dserv.Add(ctx, a))
+	require.NoError(t, dserv.Add(ctx, b))
+	require.NoError(t, dserv.Add(ctx, c))
+
+	sz := atomic.NewUint64(0)
+	ctx = context.WithValue(ctx, DagSizeContextKey, sz)
+	// Pin A{}
+	require.NoError(t, p.Pin(ctx, a, true))
+	cnt, err := p.PinnedCount(ctx, a.Cid())
+	require.NoError(t, err)
+	require.Equal(t, uint16(1), cnt)
+	sza, _ := a.Size()
+	szb, _ := b.Size()
+	szc, _ := c.Size()
+	require.Equal(t, sza+szb+szc, sz.Load())
 }
 
 func makeNodes(

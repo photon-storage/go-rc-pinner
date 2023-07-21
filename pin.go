@@ -115,6 +115,23 @@ func (p *RcPinner) doPinRecursive(
 	c cid.Cid,
 	fetch bool,
 ) error {
+	// NOTE(kmax): fetch DAG data first before bump the index count.
+	// This is to ensure that when the count is bumped, the data is guaranteed
+	// to exist locally (unless they are GC'ed whiling being fetched).
+	// Failure to bump the count after data fetch is fine. The data can be
+	// purged by GC without harm.
+	if fetch {
+		// Fetch graph starting at node identified by cid
+		if err := FetchGraphWithDepthLimit(ctx, c, -1, p.dserv); err != nil {
+			return err
+		}
+
+		// If autosyncing, sync dag service before making any change to pins
+		if err := p.flushDagService(ctx, false); err != nil {
+			return err
+		}
+	}
+
 	if err := func() error {
 		p.mu.Lock()
 		defer p.mu.Unlock()
@@ -129,20 +146,6 @@ func (p *RcPinner) doPinRecursive(
 
 		return nil
 	}(); err != nil {
-		return err
-	}
-
-	if !fetch {
-		return nil
-	}
-
-	// Fetch graph starting at node identified by cid
-	if err := merkledag.FetchGraph(ctx, c, p.dserv); err != nil {
-		return err
-	}
-
-	// If autosyncing, sync dag service before making any change to pins
-	if err := p.flushDagService(ctx, false); err != nil {
 		return err
 	}
 
