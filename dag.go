@@ -65,20 +65,15 @@ func FetchGraphWithDepthLimit(
 
 			links := nd.Links()
 			if st != nil {
+				var sz uint64
 				if len(links) == 0 {
-					sz, err := nd.Size()
-					if err != nil {
+					if sz, err = nd.Size(); err != nil {
 						return nil, err
 					}
-					st.Add(sz)
 				} else {
-					var sz uint64
-					for _, link := range links {
-						sz += uint64(len(link.Name))
-						sz += uint64(8)
-						sz += uint64(link.Cid.ByteLen())
-					}
+					sz = uint64(len(nd.RawData()))
 				}
+				st.Add(sz)
 			}
 
 			return links, nil
