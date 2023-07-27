@@ -471,9 +471,9 @@ func TestSizeStats(t *testing.T) {
 	cnt, err := p.PinnedCount(ctx, a.Cid())
 	require.NoError(t, err)
 	require.Equal(t, uint16(1), cnt)
-	sza, _ := a.Size()
-	szb, _ := b.Size()
-	szc, _ := c.Size()
+	sza := uint64(len(a.RawData()))
+	szb := uint64(len(b.RawData()))
+	szc := uint64(len(c.RawData()))
 	require.Equal(t, sza+szb+szc, sz.Load())
 }
 
