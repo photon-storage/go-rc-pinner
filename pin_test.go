@@ -67,7 +67,7 @@ func assertUnpinned(t *testing.T, p pin.Pinner, c cid.Cid) {
 	require.False(t, pinned)
 }
 
-func TestPinnerBasic(t *testing.T) {
+func TestPinnerBasics(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -82,14 +82,13 @@ func TestPinnerBasic(t *testing.T) {
 	require.NoError(t, dserv.Add(ctx, a))
 
 	// Pin A{}
-	cnt, err := p.PinnedCount(ctx, a.Cid())
+	cnt, err := p.PinnedCount(ctx, a.Cid(), true)
 	require.NoError(t, err)
 	require.Equal(t, uint16(0), cnt)
-	require.ErrorIs(t, ErrDirectPinUnsupported, p.Pin(ctx, a, false))
 	require.NoError(t, p.Pin(ctx, a, true))
 	assertPinned(t, p, a.Cid())
 	assertPinnedWithType(t, p, a.Cid(), pin.Recursive)
-	cnt, err = p.PinnedCount(ctx, a.Cid())
+	cnt, err = p.PinnedCount(ctx, a.Cid(), true)
 	require.NoError(t, err)
 	require.Equal(t, uint16(1), cnt)
 
@@ -105,21 +104,21 @@ func TestPinnerBasic(t *testing.T) {
 	require.NoError(t, dserv.Add(ctx, b))
 
 	// recursively pin B{A,C}
-	cnt, err = p.PinnedCount(ctx, b.Cid())
+	cnt, err = p.PinnedCount(ctx, b.Cid(), true)
 	require.NoError(t, err)
 	require.Equal(t, uint16(0), cnt)
-	cnt, err = p.PinnedCount(ctx, c.Cid())
+	cnt, err = p.PinnedCount(ctx, c.Cid(), true)
 	require.NoError(t, err)
 	require.Equal(t, uint16(0), cnt)
 	require.NoError(t, p.Pin(ctx, b, true))
 	assertPinned(t, p, b.Cid())
 	assertPinnedWithType(t, p, b.Cid(), pin.Recursive)
-	cnt, err = p.PinnedCount(ctx, b.Cid())
+	cnt, err = p.PinnedCount(ctx, b.Cid(), true)
 	require.NoError(t, err)
 	require.Equal(t, uint16(1), cnt)
 	assertPinned(t, p, c.Cid())
 	assertPinnedWithType(t, p, c.Cid(), pin.Indirect)
-	cnt, err = p.PinnedCount(ctx, c.Cid())
+	cnt, err = p.PinnedCount(ctx, c.Cid(), true)
 	require.NoError(t, err)
 	require.Equal(t, uint16(0), cnt)
 
@@ -134,12 +133,55 @@ func TestPinnerBasic(t *testing.T) {
 	require.NoError(t, dserv.Add(ctx, d))
 
 	// Add D{A,C,E}
-	cnt, err = p.PinnedCount(ctx, d.Cid())
+	cnt, err = p.PinnedCount(ctx, d.Cid(), true)
 	require.NoError(t, err)
 	require.Equal(t, uint16(0), cnt)
 	require.NoError(t, p.Pin(ctx, d, true))
 	assertPinned(t, p, d.Cid())
-	cnt, err = p.PinnedCount(ctx, d.Cid())
+	cnt, err = p.PinnedCount(ctx, d.Cid(), true)
+	require.NoError(t, err)
+	require.Equal(t, uint16(1), cnt)
+
+	// Add direct pin A, D, F
+	// Direct pins and recursive pins are independent
+	f := rndNode(t)
+	cnt, err = p.PinnedCount(ctx, a.Cid(), true)
+	require.NoError(t, err)
+	require.Equal(t, uint16(1), cnt)
+	cnt, err = p.PinnedCount(ctx, d.Cid(), true)
+	require.NoError(t, err)
+	require.Equal(t, uint16(1), cnt)
+	cnt, err = p.PinnedCount(ctx, f.Cid(), true)
+	require.NoError(t, err)
+	require.Equal(t, uint16(0), cnt)
+	cnt, err = p.PinnedCount(ctx, a.Cid(), false)
+	require.NoError(t, err)
+	require.Equal(t, uint16(0), cnt)
+	cnt, err = p.PinnedCount(ctx, d.Cid(), false)
+	require.NoError(t, err)
+	require.Equal(t, uint16(0), cnt)
+	cnt, err = p.PinnedCount(ctx, f.Cid(), false)
+	require.NoError(t, err)
+	require.Equal(t, uint16(0), cnt)
+	require.NoError(t, p.Pin(ctx, a, false))
+	require.NoError(t, p.Pin(ctx, d, false))
+	require.NoError(t, p.Pin(ctx, f, false))
+	cnt, err = p.PinnedCount(ctx, a.Cid(), true)
+	require.NoError(t, err)
+	require.Equal(t, uint16(1), cnt)
+	cnt, err = p.PinnedCount(ctx, d.Cid(), true)
+	require.NoError(t, err)
+	require.Equal(t, uint16(1), cnt)
+	cnt, err = p.PinnedCount(ctx, f.Cid(), true)
+	require.NoError(t, err)
+	require.Equal(t, uint16(0), cnt)
+	cnt, err = p.PinnedCount(ctx, a.Cid(), false)
+	require.NoError(t, err)
+	require.Equal(t, uint16(1), cnt)
+	cnt, err = p.PinnedCount(ctx, d.Cid(), false)
+	require.NoError(t, err)
+	require.Equal(t, uint16(1), cnt)
+	cnt, err = p.PinnedCount(ctx, f.Cid(), false)
 	require.NoError(t, err)
 	require.Equal(t, uint16(1), cnt)
 
@@ -153,13 +195,20 @@ func TestPinnerBasic(t *testing.T) {
 	require.True(t, m[b.Cid()])
 	require.True(t, m[d.Cid()])
 
-	pinned, err := p.CheckIfPinned(ctx, a.Cid(), b.Cid(), c.Cid(), d.Cid())
+	// DAG: D{A,C,E}, B{A,C}
+	// Recursive: A,B,D
+	// Direct: A,D,F
+	pinned, err := p.CheckIfPinned(ctx, a.Cid(), b.Cid(), c.Cid(), d.Cid(), e.Cid(), f.Cid())
 	require.NoError(t, err)
-	require.Equal(t, 4, len(pinned))
+	require.Equal(t, 6, len(pinned))
 	for _, pn := range pinned {
-		if pn.Key == c.Cid() {
+		if pn.Key == c.Cid() || pn.Key == e.Cid() {
 			require.Equal(t, pin.Indirect, pn.Mode)
 			require.True(t, pn.Via == d.Cid() || pn.Via == b.Cid())
+		} else if pn.Key == a.Cid() || pn.Key == d.Cid() {
+			require.Equal(t, pin.Any, pn.Mode)
+		} else if pn.Key == f.Cid() {
+			require.Equal(t, pin.Direct, pn.Mode)
 		} else {
 			require.Equal(t, pin.Recursive, pn.Mode)
 		}
@@ -167,15 +216,26 @@ func TestPinnerBasic(t *testing.T) {
 
 	cids = readCh(t, p.DirectKeys(ctx))
 	require.NoError(t, err)
-	require.Equal(t, 0, len(cids))
+	require.Equal(t, 3, len(cids))
+	m = map[cid.Cid]bool{}
+	for _, c := range cids {
+		m[c] = true
+	}
+	require.True(t, m[a.Cid()])
+	require.True(t, m[d.Cid()])
+	require.True(t, m[f.Cid()])
 
 	cids = readCh(t, p.InternalPins(ctx))
 	require.NoError(t, err)
 	require.Equal(t, 0, len(cids))
 
-	require.ErrorIs(t, ErrDirectPinUnsupported, p.Unpin(ctx, d.Cid(), false))
+	// Direct unpin
+	require.ErrorIs(t, pin.ErrNotPinned, p.Unpin(ctx, c.Cid(), false))
+	require.NoError(t, p.Unpin(ctx, d.Cid(), false))
+	require.NoError(t, p.Unpin(ctx, f.Cid(), false))
 
-	// Test recursive unpin
+	// Recursive unpin
+	require.ErrorIs(t, pin.ErrNotPinned, p.Unpin(ctx, c.Cid(), true))
 	require.NoError(t, p.Unpin(ctx, d.Cid(), true))
 	require.ErrorIs(t, pin.ErrNotPinned, p.Unpin(ctx, d.Cid(), true))
 
@@ -194,19 +254,41 @@ func TestPinnerBasic(t *testing.T) {
 	require.NoError(t, p.Pin(ctx, a, true))
 	require.NoError(t, p.Pin(ctx, b, true))
 
-	cnt, err = p.PinnedCount(ctx, a.Cid())
+	cnt, err = p.PinnedCount(ctx, a.Cid(), true)
 	require.NoError(t, err)
 	require.Equal(t, uint16(2), cnt)
-	cnt, err = p.PinnedCount(ctx, b.Cid())
+	cnt, err = p.PinnedCount(ctx, b.Cid(), true)
 	require.NoError(t, err)
 	require.Equal(t, uint16(2), cnt)
-	cnt, err = p.PinnedCount(ctx, c.Cid())
+	cnt, err = p.PinnedCount(ctx, c.Cid(), true)
 	require.NoError(t, err)
 	require.Equal(t, uint16(0), cnt)
-	cnt, err = p.PinnedCount(ctx, d.Cid())
+	cnt, err = p.PinnedCount(ctx, d.Cid(), true)
 	require.NoError(t, err)
 	require.Equal(t, uint16(0), cnt)
-	cnt, err = p.PinnedCount(ctx, e.Cid())
+	cnt, err = p.PinnedCount(ctx, e.Cid(), true)
+	require.NoError(t, err)
+	require.Equal(t, uint16(0), cnt)
+	cnt, err = p.PinnedCount(ctx, f.Cid(), true)
+	require.NoError(t, err)
+	require.Equal(t, uint16(0), cnt)
+
+	cnt, err = p.PinnedCount(ctx, a.Cid(), false)
+	require.NoError(t, err)
+	require.Equal(t, uint16(1), cnt)
+	cnt, err = p.PinnedCount(ctx, b.Cid(), false)
+	require.NoError(t, err)
+	require.Equal(t, uint16(0), cnt)
+	cnt, err = p.PinnedCount(ctx, c.Cid(), false)
+	require.NoError(t, err)
+	require.Equal(t, uint16(0), cnt)
+	cnt, err = p.PinnedCount(ctx, d.Cid(), false)
+	require.NoError(t, err)
+	require.Equal(t, uint16(0), cnt)
+	cnt, err = p.PinnedCount(ctx, e.Cid(), false)
+	require.NoError(t, err)
+	require.Equal(t, uint16(0), cnt)
+	cnt, err = p.PinnedCount(ctx, f.Cid(), false)
 	require.NoError(t, err)
 	require.Equal(t, uint16(0), cnt)
 }
@@ -375,10 +457,11 @@ func TestFlush(t *testing.T) {
 	p, err := New(ctx, dstore, dserv)
 	require.NoError(t, err)
 
-	c := rndNode(t).Cid()
-	require.NoError(t, p.PinWithMode(ctx, c, pin.Recursive))
+	nd := rndNode(t)
+	require.NoError(t, dserv.Add(ctx, nd))
+	require.NoError(t, p.PinWithMode(ctx, nd.Cid(), pin.Recursive))
 	require.NoError(t, p.Flush(ctx))
-	assertPinned(t, p, c)
+	assertPinned(t, p, nd.Cid())
 }
 
 func TestPinRecursiveFail(t *testing.T) {
@@ -468,7 +551,7 @@ func TestSizeStats(t *testing.T) {
 	ctx = context.WithValue(ctx, DagSizeContextKey, sz)
 	// Pin A{}
 	require.NoError(t, p.Pin(ctx, a, true))
-	cnt, err := p.PinnedCount(ctx, a.Cid())
+	cnt, err := p.PinnedCount(ctx, a.Cid(), true)
 	require.NoError(t, err)
 	require.Equal(t, uint16(1), cnt)
 	sza := uint64(len(a.RawData()))
