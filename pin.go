@@ -429,65 +429,112 @@ func (p *RcPinner) CheckIfPinned(
 // DirectKeys returns a slice containing the directly pinned keys
 func (p *RcPinner) DirectKeys(ctx context.Context) <-chan pin.StreamedCid {
 	out := make(chan pin.StreamedCid)
+	re := make(chan *StreamedCidWithCount)
 	go func() {
 		p.mu.RLock()
 		defer p.mu.RUnlock()
+		defer close(re)
+
+		keysWithCount(ctx, p.cidDIdx, re)
+	}()
+
+	go func() {
 		defer close(out)
-
-		cidSet := cid.NewSet()
-		if err := p.cidDIdx.forEach(
-			ctx,
-			func(c cid.Cid, cnt uint16) (bool, error) {
-				if cidSet.Has(c) || cnt == 0 {
-					return true, nil
-				}
-
-				select {
-				case <-ctx.Done():
-					return false, nil
-				case out <- pin.StreamedCid{C: c}:
-				}
-				cidSet.Add(c)
-				return true, nil
-			},
-		); err != nil {
-			out <- pin.StreamedCid{Err: err}
+		for v := range re {
+			out <- v.Cid
 		}
 	}()
 
 	return out
 }
 
-// RecursiveKeys returns a slice containing the recursively pinned keys
-func (p *RcPinner) RecursiveKeys(ctx context.Context) <-chan pin.StreamedCid {
-	out := make(chan pin.StreamedCid)
+// DirectKeysWithCount steams out directly pinned keys with reference count.
+func (p *RcPinner) DirectKeysWithCount(
+	ctx context.Context,
+) <-chan *StreamedCidWithCount {
+	out := make(chan *StreamedCidWithCount)
 	go func() {
 		p.mu.RLock()
 		defer p.mu.RUnlock()
 		defer close(out)
+		keysWithCount(ctx, p.cidDIdx, out)
+	}()
 
-		cidSet := cid.NewSet()
-		if err := p.cidRIdx.forEach(
-			ctx,
-			func(c cid.Cid, cnt uint16) (bool, error) {
-				if cidSet.Has(c) || cnt == 0 {
-					return true, nil
-				}
+	return out
+}
 
-				select {
-				case <-ctx.Done():
-					return false, nil
-				case out <- pin.StreamedCid{C: c}:
-				}
-				cidSet.Add(c)
-				return true, nil
-			},
-		); err != nil {
-			out <- pin.StreamedCid{Err: err}
+// RecursiveKeys steams out recursively pinned keys
+func (p *RcPinner) RecursiveKeys(ctx context.Context) <-chan pin.StreamedCid {
+	out := make(chan pin.StreamedCid)
+	re := make(chan *StreamedCidWithCount)
+	go func() {
+		p.mu.RLock()
+		defer p.mu.RUnlock()
+		defer close(re)
+		keysWithCount(ctx, p.cidRIdx, re)
+	}()
+
+	go func() {
+		defer close(out)
+		for v := range re {
+			out <- v.Cid
 		}
 	}()
 
 	return out
+}
+
+// RecursiveKeysWithCount steams out recursively pinned keys with reference count.
+func (p *RcPinner) RecursiveKeysWithCount(
+	ctx context.Context,
+) <-chan *StreamedCidWithCount {
+	out := make(chan *StreamedCidWithCount)
+	go func() {
+		p.mu.RLock()
+		defer p.mu.RUnlock()
+		defer close(out)
+		keysWithCount(ctx, p.cidRIdx, out)
+	}()
+
+	return out
+}
+
+type StreamedCidWithCount struct {
+	Cid   pin.StreamedCid
+	Count uint16
+}
+
+// keysWithCount steams out pinned keys with corresponding reference count.
+func keysWithCount(
+	ctx context.Context,
+	idx *index,
+	out chan *StreamedCidWithCount,
+) {
+	cidSet := cid.NewSet()
+	if err := idx.forEach(
+		ctx,
+		func(c cid.Cid, cnt uint16) (bool, error) {
+			if cidSet.Has(c) || cnt == 0 {
+				return true, nil
+			}
+
+			select {
+			case <-ctx.Done():
+				return false, nil
+			case out <- &StreamedCidWithCount{
+				Cid:   pin.StreamedCid{C: c},
+				Count: cnt,
+			}:
+			}
+
+			cidSet.Add(c)
+			return true, nil
+		},
+	); err != nil {
+		out <- &StreamedCidWithCount{
+			Cid: pin.StreamedCid{Err: err},
+		}
+	}
 }
 
 // InternalPins returns all cids kept pinned for the internal state of the
