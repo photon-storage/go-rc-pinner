@@ -187,13 +187,9 @@ func TestPinnerBasics(t *testing.T) {
 
 	cids := readCh(t, p.RecursiveKeys(ctx))
 	require.Equal(t, 3, len(cids))
-	m := map[cid.Cid]bool{}
-	for _, c := range cids {
-		m[c] = true
-	}
-	require.True(t, m[a.Cid()])
-	require.True(t, m[b.Cid()])
-	require.True(t, m[d.Cid()])
+	require.True(t, cids[a.Cid()])
+	require.True(t, cids[b.Cid()])
+	require.True(t, cids[d.Cid()])
 
 	// DAG: D{A,C,E}, B{A,C}
 	// Recursive: A,B,D
@@ -217,13 +213,9 @@ func TestPinnerBasics(t *testing.T) {
 	cids = readCh(t, p.DirectKeys(ctx))
 	require.NoError(t, err)
 	require.Equal(t, 3, len(cids))
-	m = map[cid.Cid]bool{}
-	for _, c := range cids {
-		m[c] = true
-	}
-	require.True(t, m[a.Cid()])
-	require.True(t, m[d.Cid()])
-	require.True(t, m[f.Cid()])
+	require.True(t, cids[a.Cid()])
+	require.True(t, cids[d.Cid()])
+	require.True(t, cids[f.Cid()])
 
 	cids = readCh(t, p.InternalPins(ctx))
 	require.NoError(t, err)
@@ -491,6 +483,72 @@ func TestPinRecursiveFail(t *testing.T) {
 	mctx, cancel = context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	require.NoError(t, p.Pin(mctx, a, true))
+}
+
+func TestStreamKeys(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	dstore := dssync.MutexWrap(ds.NewMapDatastore())
+	bstore := blockstore.NewBlockstore(dstore)
+	bserv := bs.New(bstore, offline.Exchange(bstore))
+	dserv := mdag.NewDAGService(bserv)
+	p, err := New(ctx, dstore, dserv)
+	require.NoError(t, err)
+
+	// A{B,C{D,E},F}
+	a := rndNode(t)
+	b := rndNode(t)
+	c := rndNode(t)
+	d := rndNode(t)
+	e := rndNode(t)
+	f := rndNode(t)
+	require.NoError(t, c.AddNodeLink("c0", d))
+	require.NoError(t, c.AddNodeLink("c1", e))
+	require.NoError(t, a.AddNodeLink("c0", b))
+	require.NoError(t, a.AddNodeLink("c0", c))
+	require.NoError(t, a.AddNodeLink("c0", f))
+
+	require.NoError(t, dserv.Add(ctx, a))
+	require.NoError(t, dserv.Add(ctx, b))
+	require.NoError(t, dserv.Add(ctx, c))
+	require.NoError(t, dserv.Add(ctx, d))
+	require.NoError(t, dserv.Add(ctx, e))
+	require.NoError(t, dserv.Add(ctx, f))
+
+	require.NoError(t, p.Pin(ctx, a, true))
+	require.NoError(t, p.Pin(ctx, a, true))
+	require.NoError(t, p.Pin(ctx, b, true))
+
+	require.NoError(t, p.Pin(ctx, a, false))
+	require.NoError(t, p.Pin(ctx, c, false))
+	require.NoError(t, p.Pin(ctx, d, false))
+	require.NoError(t, p.Pin(ctx, d, false))
+	require.NoError(t, p.Pin(ctx, e, false))
+
+	cids := readCh(t, p.RecursiveKeys(ctx))
+	require.Equal(t, 2, len(cids))
+	require.True(t, cids[a.Cid()])
+	require.True(t, cids[b.Cid()])
+
+	cidCnts := readCountCh(t, p.RecursiveKeysWithCount(ctx))
+	require.Equal(t, 2, len(cidCnts))
+	require.Equal(t, 2, cidCnts[a.Cid()])
+	require.Equal(t, 1, cidCnts[b.Cid()])
+
+	cids = readCh(t, p.DirectKeys(ctx))
+	require.Equal(t, 4, len(cids))
+	require.True(t, cids[a.Cid()])
+	require.True(t, cids[c.Cid()])
+	require.True(t, cids[d.Cid()])
+	require.True(t, cids[e.Cid()])
+
+	cidCnts = readCountCh(t, p.DirectKeysWithCount(ctx))
+	require.Equal(t, 4, len(cidCnts))
+	require.Equal(t, 1, cidCnts[a.Cid()])
+	require.Equal(t, 1, cidCnts[c.Cid()])
+	require.Equal(t, 2, cidCnts[d.Cid()])
+	require.Equal(t, 1, cidCnts[e.Cid()])
 }
 
 func TestCidIndex(t *testing.T) {
@@ -772,11 +830,23 @@ func benchmarkPinAll(
 	}
 }
 
-func readCh(t *testing.T, ch <-chan pin.StreamedCid) []cid.Cid {
-	var arr []cid.Cid
+func readCh(t *testing.T, ch <-chan pin.StreamedCid) map[cid.Cid]bool {
+	m := map[cid.Cid]bool{}
 	for re := range ch {
 		require.NoError(t, re.Err)
-		arr = append(arr, re.C)
+		m[re.C] = true
 	}
-	return arr
+	return m
+}
+
+func readCountCh(
+	t *testing.T,
+	ch <-chan *StreamedCidWithCount,
+) map[cid.Cid]int {
+	m := map[cid.Cid]int{}
+	for re := range ch {
+		require.NoError(t, re.Cid.Err)
+		m[re.Cid.C] = int(re.Count)
+	}
+	return m
 }
