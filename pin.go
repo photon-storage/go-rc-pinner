@@ -448,7 +448,7 @@ func (p *RcPinner) DirectKeys(ctx context.Context) <-chan pin.StreamedCid {
 	return out
 }
 
-// DirectKeysWithCount steams out directly pinned keys with reference count.
+// DirectKeysWithCount streams out directly pinned keys with reference count.
 func (p *RcPinner) DirectKeysWithCount(
 	ctx context.Context,
 ) <-chan *StreamedCidWithCount {
@@ -463,7 +463,7 @@ func (p *RcPinner) DirectKeysWithCount(
 	return out
 }
 
-// RecursiveKeys steams out recursively pinned keys
+// RecursiveKeys streams out recursively pinned keys
 func (p *RcPinner) RecursiveKeys(ctx context.Context) <-chan pin.StreamedCid {
 	out := make(chan pin.StreamedCid)
 	re := make(chan *StreamedCidWithCount)
@@ -484,7 +484,8 @@ func (p *RcPinner) RecursiveKeys(ctx context.Context) <-chan pin.StreamedCid {
 	return out
 }
 
-// RecursiveKeysWithCount steams out recursively pinned keys with reference count.
+// RecursiveKeysWithCount streams out recursively pinned keys with
+// reference count.
 func (p *RcPinner) RecursiveKeysWithCount(
 	ctx context.Context,
 ) <-chan *StreamedCidWithCount {
@@ -504,7 +505,7 @@ type StreamedCidWithCount struct {
 	Count uint16
 }
 
-// keysWithCount steams out pinned keys with corresponding reference count.
+// keysWithCount streams out pinned keys with corresponding reference count.
 func keysWithCount(
 	ctx context.Context,
 	idx *index,
