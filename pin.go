@@ -188,32 +188,18 @@ func (p *RcPinner) Unpin(ctx context.Context, c cid.Cid, recursive bool) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if recursive {
-		rcnt, err := p.cidRIdx.get(ctx, c)
-		if err != nil {
-			return err
-		}
+	idx := p.index(recursive)
+	rcnt, err := idx.get(ctx, c)
+	if err != nil {
+		return err
+	}
 
-		if rcnt == 0 {
-			return pin.ErrNotPinned
-		}
+	if rcnt == 0 {
+		return pin.ErrNotPinned
+	}
 
-		if _, err := p.cidRIdx.dec(ctx, c, 1); err != nil {
-			return err
-		}
-	} else {
-		rcnt, err := p.cidDIdx.get(ctx, c)
-		if err != nil {
-			return err
-		}
-
-		if rcnt == 0 {
-			return pin.ErrNotPinned
-		}
-
-		if _, err := p.cidDIdx.dec(ctx, c, 1); err != nil {
-			return err
-		}
+	if _, err := idx.dec(ctx, c, 1); err != nil {
+		return err
 	}
 
 	return p.flushPins(ctx, false)
@@ -225,20 +211,12 @@ func (p *RcPinner) Unpin(ctx context.Context, c cid.Cid, recursive bool) error {
 func (p *RcPinner) GetCount(
 	ctx context.Context,
 	c cid.Cid,
-	recursively bool,
+	recursive bool,
 ) (uint16, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if recursively {
-		rcnt, err := p.cidRIdx.get(ctx, c)
-		if err != nil {
-			return 0, err
-		}
-		return rcnt, nil
-	}
-
-	rcnt, err := p.cidDIdx.get(ctx, c)
+	rcnt, err := p.index(recursive).get(ctx, c)
 	if err != nil {
 		return 0, err
 	}
@@ -256,14 +234,8 @@ func (p *RcPinner) IncCount(
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if recursive {
-		if _, err := p.cidRIdx.inc(ctx, c, 1); err != nil {
-			return err
-		}
-	} else {
-		if _, err := p.cidDIdx.inc(ctx, c, 1); err != nil {
-			return err
-		}
+	if _, err := p.index(recursive).inc(ctx, c, 1); err != nil {
+		return err
 	}
 
 	if err := p.flushPins(ctx, false); err != nil {
@@ -280,6 +252,48 @@ func (p *RcPinner) DecCount(
 	recursive bool,
 ) error {
 	return p.Unpin(ctx, c, recursive)
+}
+
+type UpdateCount struct {
+	CID       cid.Cid
+	Recursive bool
+}
+
+// UpdateCounts updates reference count for the given CIDs. It ensures the op
+// is all or nothing.
+func (p *RcPinner) UpdateCounts(
+	ctx context.Context,
+	incs []*UpdateCount,
+	decs []*UpdateCount,
+) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	// Sanity check to ensure decs can succeed.
+	for _, dec := range decs {
+		cnt, _ := p.index(dec.Recursive).get(ctx, dec.CID)
+		if cnt == 0 {
+			return pin.ErrNotPinned
+		}
+	}
+
+	for _, inc := range incs {
+		if _, err := p.index(inc.Recursive).inc(ctx, inc.CID, 1); err != nil {
+			return err
+		}
+	}
+
+	for _, dec := range decs {
+		if _, err := p.index(dec.Recursive).dec(ctx, dec.CID, 1); err != nil {
+			return err
+		}
+	}
+
+	if err := p.flushPins(ctx, false); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // IsPinned returns whether or not the given key is pinned
@@ -675,15 +689,11 @@ func (p *RcPinner) PinWithMode(
 }
 
 // TotalPinnedCount returns total reference count pinned in the index.
-func (p *RcPinner) TotalPinnedCount(recursively bool) uint64 {
+func (p *RcPinner) TotalPinnedCount(recursive bool) uint64 {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if recursively {
-		return p.cidRIdx.totalCount()
-	}
-
-	return p.cidDIdx.totalCount()
+	return p.index(recursive).totalCount()
 }
 
 // hasChild recursively looks for a Cid among the children of a root Cid.
@@ -719,4 +729,11 @@ func hasChild(
 	}
 
 	return false, nil
+}
+
+func (p *RcPinner) index(recursive bool) *index {
+	if recursive {
+		return p.cidRIdx
+	}
+	return p.cidDIdx
 }

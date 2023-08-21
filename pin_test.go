@@ -548,6 +548,124 @@ func TestRefCount(t *testing.T) {
 	require.Equal(t, uint16(1), cnt)
 }
 
+func TestRefCountUpdates(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	dstore := dssync.MutexWrap(ds.NewMapDatastore())
+	bstore := blockstore.NewBlockstore(dstore)
+	bserv := bs.New(bstore, offline.Exchange(bstore))
+	dserv := mdag.NewDAGService(bserv)
+	p, err := New(ctx, dstore, dserv)
+	require.NoError(t, err)
+
+	a := rndNode(t)
+	b := rndNode(t)
+	c := rndNode(t)
+	require.NoError(t, dserv.Add(ctx, a))
+	require.NoError(t, dserv.Add(ctx, b))
+	require.NoError(t, dserv.Add(ctx, c))
+
+	cnt, err := p.GetCount(ctx, a.Cid(), true)
+	require.NoError(t, err)
+	require.Equal(t, uint16(0), cnt)
+	cnt, err = p.GetCount(ctx, b.Cid(), true)
+	require.NoError(t, err)
+	require.Equal(t, uint16(0), cnt)
+	cnt, err = p.GetCount(ctx, c.Cid(), false)
+	require.NoError(t, err)
+	require.Equal(t, uint16(0), cnt)
+
+	require.NoError(t, p.UpdateCounts(
+		ctx,
+		[]*UpdateCount{
+			&UpdateCount{
+				CID:       a.Cid(),
+				Recursive: true,
+			},
+			&UpdateCount{
+				CID:       b.Cid(),
+				Recursive: true,
+			},
+			&UpdateCount{
+				CID:       c.Cid(),
+				Recursive: false,
+			},
+		},
+		nil,
+	))
+
+	cnt, err = p.GetCount(ctx, a.Cid(), true)
+	require.NoError(t, err)
+	require.Equal(t, uint16(1), cnt)
+	cnt, err = p.GetCount(ctx, b.Cid(), true)
+	require.NoError(t, err)
+	require.Equal(t, uint16(1), cnt)
+	cnt, err = p.GetCount(ctx, c.Cid(), false)
+	require.NoError(t, err)
+	require.Equal(t, uint16(1), cnt)
+
+	require.ErrorIs(t, pin.ErrNotPinned, p.UpdateCounts(
+		ctx,
+		[]*UpdateCount{
+			&UpdateCount{
+				CID:       a.Cid(),
+				Recursive: true,
+			},
+			&UpdateCount{
+				CID:       b.Cid(),
+				Recursive: true,
+			},
+		},
+		[]*UpdateCount{
+			&UpdateCount{
+				CID:       c.Cid(),
+				Recursive: true,
+			},
+		},
+	))
+
+	cnt, err = p.GetCount(ctx, a.Cid(), true)
+	require.NoError(t, err)
+	require.Equal(t, uint16(1), cnt)
+	cnt, err = p.GetCount(ctx, b.Cid(), true)
+	require.NoError(t, err)
+	require.Equal(t, uint16(1), cnt)
+	cnt, err = p.GetCount(ctx, c.Cid(), false)
+	require.NoError(t, err)
+	require.Equal(t, uint16(1), cnt)
+
+	require.NoError(t, p.UpdateCounts(
+		ctx,
+		[]*UpdateCount{
+			&UpdateCount{
+				CID:       b.Cid(),
+				Recursive: true,
+			},
+		},
+		[]*UpdateCount{
+			&UpdateCount{
+				CID:       a.Cid(),
+				Recursive: true,
+			},
+			&UpdateCount{
+				CID:       c.Cid(),
+				Recursive: false,
+			},
+		},
+	))
+
+	cnt, err = p.GetCount(ctx, a.Cid(), true)
+	require.NoError(t, err)
+	require.Equal(t, uint16(0), cnt)
+	cnt, err = p.GetCount(ctx, b.Cid(), true)
+	require.NoError(t, err)
+	require.Equal(t, uint16(2), cnt)
+	cnt, err = p.GetCount(ctx, c.Cid(), false)
+	require.NoError(t, err)
+	require.Equal(t, uint16(0), cnt)
+}
+
 func TestStreamKeys(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
