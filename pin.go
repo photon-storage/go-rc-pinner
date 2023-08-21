@@ -219,6 +219,69 @@ func (p *RcPinner) Unpin(ctx context.Context, c cid.Cid, recursive bool) error {
 	return p.flushPins(ctx, false)
 }
 
+// GetCount returns the reference count pinned in the index for the
+// given CID. The API looks up only the exact CID given in the index.
+// It does not check descendent recursively.
+func (p *RcPinner) GetCount(
+	ctx context.Context,
+	c cid.Cid,
+	recursively bool,
+) (uint16, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if recursively {
+		rcnt, err := p.cidRIdx.get(ctx, c)
+		if err != nil {
+			return 0, err
+		}
+		return rcnt, nil
+	}
+
+	rcnt, err := p.cidDIdx.get(ctx, c)
+	if err != nil {
+		return 0, err
+	}
+
+	return rcnt, nil
+}
+
+// IncCount increases reference count for the given CID. This is a shortcut for
+// adding a reference count without going through the heavy pinning process.
+func (p *RcPinner) IncCount(
+	ctx context.Context,
+	c cid.Cid,
+	recursive bool,
+) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if recursive {
+		if _, err := p.cidRIdx.inc(ctx, c, 1); err != nil {
+			return err
+		}
+	} else {
+		if _, err := p.cidDIdx.inc(ctx, c, 1); err != nil {
+			return err
+		}
+	}
+
+	if err := p.flushPins(ctx, false); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// DecCount decreases reference count for the given CID. Same as Unpin.
+func (p *RcPinner) DecCount(
+	ctx context.Context,
+	c cid.Cid,
+	recursive bool,
+) error {
+	return p.Unpin(ctx, c, recursive)
+}
+
 // IsPinned returns whether or not the given key is pinned
 // and an explanation of why its pinned
 func (p *RcPinner) IsPinned(
@@ -609,33 +672,6 @@ func (p *RcPinner) PinWithMode(
 	default:
 		return fmt.Errorf("unrecognized pin mode")
 	}
-}
-
-// PinnedCount returns the reference count pinned in the index for the
-// given CID. The API looks up only the exact CID given in the index.
-// It does not check descendent recursively.
-func (p *RcPinner) PinnedCount(
-	ctx context.Context,
-	c cid.Cid,
-	recursively bool,
-) (uint16, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	if recursively {
-		rcnt, err := p.cidRIdx.get(ctx, c)
-		if err != nil {
-			return 0, err
-		}
-		return rcnt, nil
-	}
-
-	rcnt, err := p.cidDIdx.get(ctx, c)
-	if err != nil {
-		return 0, err
-	}
-
-	return rcnt, nil
 }
 
 // TotalPinnedCount returns total reference count pinned in the index.
