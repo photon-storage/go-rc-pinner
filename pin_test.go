@@ -787,7 +787,7 @@ func TestSizeStats(t *testing.T) {
 	require.NoError(t, dserv.Add(ctx, c))
 
 	sz := atomic.NewUint64(0)
-	ctx = context.WithValue(ctx, DagSizeContextKey, sz)
+	ctx = WithDagSize(ctx, sz)
 	// Pin A{}
 	require.NoError(t, p.Pin(ctx, a, true))
 	cnt, err := p.GetCount(ctx, a.Cid(), true)

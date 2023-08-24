@@ -6,13 +6,7 @@ import (
 	"github.com/ipfs/boxo/ipld/merkledag"
 	"github.com/ipfs/go-cid"
 	format "github.com/ipfs/go-ipld-format"
-	"go.uber.org/atomic"
 )
-
-type contextKey string
-
-const progressContextKey contextKey = "progress"
-const DagSizeContextKey contextKey = "dag_size"
 
 // NOTE(kmax): function forked from github.com/ipfs/boxo/ipld/merkledag package
 // with refactoring to support with dag size stats.
@@ -50,8 +44,12 @@ func FetchGraphWithDepthLimit(
 		return false
 	}
 
-	st, _ := ctx.Value(DagSizeContextKey).(*atomic.Uint64)
-	pt, _ := ctx.Value(progressContextKey).(*merkledag.ProgressTracker)
+	st := DagSize(ctx)
+	pt := ProgressTracker(ctx)
+	cc := Concurrency(ctx)
+	if cc == 0 {
+		cc = 32
+	}
 	return merkledag.WalkDepth(
 		ctx,
 		func(
@@ -88,6 +86,6 @@ func FetchGraphWithDepthLimit(
 			}
 			return false
 		},
-		merkledag.Concurrent(),
+		merkledag.Concurrency(cc),
 	)
 }
