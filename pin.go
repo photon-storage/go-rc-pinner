@@ -163,6 +163,12 @@ func (p *RcPinner) doPinRecursive(
 		}
 	}
 
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	if err := func() error {
 		p.mu.Lock()
 		defer p.mu.Unlock()
